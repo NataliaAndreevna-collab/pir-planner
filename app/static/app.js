@@ -22,12 +22,41 @@ const inputObjectName = document.getElementById("inputObjectName");
 const selectFacilityType = document.getElementById("selectFacilityType");
 const inputCustomer = document.getElementById("inputCustomer");
 const inputContractor = document.getElementById("inputContractor");
-const inputSubcontractor = document.getElementById("inputSubcontractor");
 
 const inputContractNumber = document.getElementById("inputContractNumber");
 const inputContractDate = document.getElementById("inputContractDate");
 const inputCipher = document.getElementById("inputCipher");
 const inputStartDate = document.getElementById("inputStartDate");
+
+function getTodayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+if (inputStartDate && !inputStartDate.value) {
+  inputStartDate.value = getTodayIso();
+}
+
+const btnPresetTz = document.getElementById("btnPresetTz");
+const btnPresetPermit = document.getElementById("btnPresetPermit");
+const btnPresetExpertise = document.getElementById("btnPresetExpertise");
+
+const chkStagePd = document.getElementById("chkStagePd");
+const chkStageRd = document.getElementById("chkStageRd");
+const btnAddCustomPd = document.getElementById("btnAddCustomPd");
+const btnAddCustomRd = document.getElementById("btnAddCustomRd");
+const btnSyncScheduleFromSections = document.getElementById("btnSyncScheduleFromSections");
+
+const btnSchedDetailSections = document.getElementById("btnSchedDetailSections");
+const btnSchedDetailStages = document.getElementById("btnSchedDetailStages");
+const btnRebuildSchedule = document.getElementById("btnRebuildSchedule");
+const btnAddPhase = document.getElementById("btnAddPhase");
+const btnAddMilestone = document.getElementById("btnAddMilestone");
+const scheduleMonthHeaderRow = document.getElementById("scheduleMonthHeaderRow");
+const finishDateLabel = document.getElementById("finishDateLabel");
 
 const tabBtnSections = document.getElementById("tabBtnSections");
 const tabBtnSchedule = document.getElementById("tabBtnSchedule");
@@ -44,6 +73,51 @@ const btnSelectAll = document.getElementById("btnSelectAll");
 const btnUnselectAll = document.getElementById("btnUnselectAll");
 const btnDownloadDocx = document.getElementById("btnDownloadDocx");
 const btnDownloadXlsx = document.getElementById("btnDownloadXlsx");
+
+// Соответствие марок РД аналогичным разделам ПД (при включении марки РД автоматически включается раздел ПД)
+const RD_TO_PD_MAP_CAPITAL = {
+  rd_gp: ["pzu"],
+  rd_ar: ["ar"],
+  rd_as: ["ar", "kr"],
+  rd_kzh: ["kr"],
+  rd_km: ["kr"],
+  rd_kd: ["kr"],
+  rd_eom: ["ios1"],
+  rd_es: ["ios1"],
+  rd_vk: ["ios2", "ios3"],
+  rd_nvk: ["ios2", "ios3"],
+  rd_ov: ["ios4"],
+  rd_ts: ["ios4"],
+  rd_ss: ["ios5_1"],
+  rd_ak: ["ios5_2"],
+  rd_gsn: ["ios6"],
+  rd_tx: ["tx"],
+  rd_aps: ["pb"],
+  rd_ad: ["pzu"],
+  rd_sm: ["sm"],
+};
+
+const RD_TO_PD_MAP_LINEAR = {
+  rd_gp: ["ppo"],
+  rd_ar: ["lin_infra"],
+  rd_as: ["lin_infra"],
+  rd_kzh: ["tkr"],
+  rd_km: ["tkr"],
+  rd_kd: ["tkr"],
+  rd_eom: ["tkr"],
+  rd_es: ["tkr"],
+  rd_vk: ["tkr"],
+  rd_nvk: ["tkr"],
+  rd_ov: ["tkr"],
+  rd_ts: ["tkr"],
+  rd_ss: ["tkr"],
+  rd_ak: ["tkr"],
+  rd_gsn: ["tkr"],
+  rd_tx: ["tkr"],
+  rd_aps: ["pb"],
+  rd_ad: ["tkr"],
+  rd_sm: ["sm"],
+};
 
 // Инициализация Drag & Drop
 dropZone.addEventListener("click", () => fileInput.click());
@@ -77,7 +151,7 @@ function showSelectedFile(name) {
   selectedFileName.classList.remove("hidden");
 }
 
-// Кнопка парсинга
+// Кнопка парсинга ТЗ
 btnParse.addEventListener("click", async () => {
   const formData = new FormData();
   formData.append("text", tzText.value);
@@ -107,10 +181,7 @@ btnParse.addEventListener("click", async () => {
     const data = await res.json();
     currentProject = data.project_data;
 
-    // Выводим результаты анализа
     renderInsights(data.detected_features);
-
-    // Заполняем форму и таблицы
     populateForm(currentProject);
     renderSectionsTable();
     renderScheduleTable();
@@ -118,7 +189,6 @@ btnParse.addEventListener("click", async () => {
     workspaceCard.classList.remove("hidden");
     insightsCard.classList.remove("hidden");
     workspaceCard.scrollIntoView({ behavior: "smooth" });
-
   } catch (err) {
     alert("Ошибка: " + err.message);
   } finally {
@@ -127,11 +197,10 @@ btnParse.addEventListener("click", async () => {
   }
 });
 
-// Отображение списка найденных триггеров
 function renderInsights(features) {
   detectedFeaturesList.innerHTML = "";
   if (!features || features.length === 0) {
-    detectedFeaturesList.innerHTML = "<li>Стандартные требования к проектированию капитального объекта</li>";
+    detectedFeaturesList.innerHTML = "<li>Стандартные требования к проектированию объекта</li>";
     return;
   }
   features.forEach((feat) => {
@@ -141,19 +210,58 @@ function renderInsights(features) {
   });
 }
 
-// Заполнение формы данными
+function updatePresetButtonsUI() {
+  if (!currentProject) return;
+  const preset = currentProject.composition_preset || "permit";
+  const activeCls = "px-3 py-1.5 rounded-md font-semibold transition bg-blue-600 text-white shadow-xs";
+  const inactiveCls = "px-3 py-1.5 rounded-md font-semibold transition bg-white text-slate-700 border border-slate-300 hover:border-blue-400";
+
+  if (btnPresetTz) btnPresetTz.className = preset === "tz" ? activeCls : inactiveCls;
+  if (btnPresetPermit) btnPresetPermit.className = preset === "permit" ? activeCls : inactiveCls;
+  if (btnPresetExpertise) btnPresetExpertise.className = preset === "expertise" ? activeCls : inactiveCls;
+}
+
+async function applyPresetBackend(preset) {
+  if (!currentProject) return;
+  syncProjectFromInputs();
+  try {
+    const res = await fetch(`/api/apply-preset?preset=${preset}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentProject),
+    });
+    if (res.ok) {
+      currentProject = await res.json();
+      if (chkStagePd) chkStagePd.checked = currentProject.has_pd !== false;
+      if (chkStageRd) chkStageRd.checked = !!currentProject.has_rd;
+      updatePresetButtonsUI();
+      renderSectionsTable();
+      renderScheduleTable();
+    }
+  } catch (err) {
+    console.error("Ошибка применения режима комплектности:", err);
+  }
+}
+
+if (btnPresetTz) btnPresetTz.addEventListener("click", () => applyPresetBackend("tz"));
+if (btnPresetPermit) btnPresetPermit.addEventListener("click", () => applyPresetBackend("permit"));
+if (btnPresetExpertise) btnPresetExpertise.addEventListener("click", () => applyPresetBackend("expertise"));
+
 function populateForm(proj) {
   inputObjectName.value = proj.object_name || "";
   selectFacilityType.value = proj.facility_type || "capital";
   inputCustomer.value = proj.customer || "";
   inputContractor.value = proj.contractor || "";
-  inputSubcontractor.value = proj.subcontractor || "";
 
   inputContractNumber.value = proj.contract_number || "";
   inputContractDate.value = proj.contract_date || "";
   inputCipher.value = proj.cipher || "";
-  inputStartDate.value = proj.start_date || "2026-10-01";
+  inputStartDate.value = proj.start_date || getTodayIso();
 
+  if (chkStagePd) chkStagePd.checked = proj.has_pd !== false;
+  if (chkStageRd) chkStageRd.checked = !!proj.has_rd;
+
+  updatePresetButtonsUI();
   setMode(proj.mode || "pre_contract");
 }
 
@@ -175,7 +283,6 @@ function setMode(mode) {
     modePreContract.className = "px-3.5 py-1.5 rounded-md text-xs font-semibold transition text-slate-600 hover:text-slate-900 flex items-center";
     contractFieldsPanel.classList.remove("hidden");
 
-    // Если шифр еще не сформирован, генерируем базовый
     if (!inputCipher.value && inputContractNumber.value) {
       updateCipher();
     }
@@ -184,9 +291,14 @@ function setMode(mode) {
   recalculateCiphers();
 }
 
-// Автообновление шифра из номера договора
 inputContractNumber.addEventListener("input", updateCipher);
 inputContractDate.addEventListener("input", updateCipher);
+inputStartDate.addEventListener("change", () => {
+  if (currentProject) {
+    currentProject.start_date = inputStartDate.value;
+    if (activeTab === "schedule") renderScheduleTable();
+  }
+});
 
 function updateCipher() {
   const num = inputContractNumber.value.trim();
@@ -232,16 +344,45 @@ selectFacilityType.addEventListener("change", async () => {
     body: JSON.stringify(currentProject),
   });
   currentProject = await res.json();
+  if (chkStagePd) chkStagePd.checked = currentProject.has_pd !== false;
+  if (chkStageRd) chkStageRd.checked = !!currentProject.has_rd;
+  updatePresetButtonsUI();
   renderSectionsTable();
   renderScheduleTable();
 });
 
-// Пересчет шифров
+// Пересчет шифров и номеров томов
 function recalculateCiphers() {
   if (!currentProject) return;
   const cipher = inputCipher.value.trim();
 
+  let pdMainIdx = 0;
+  let lastCategory = null;
+  let subIdx = 0;
+  let rdIdx = 0;
+
   currentProject.sections.forEach((sec) => {
+    const stage = sec.stage || "П";
+    if (stage === "П") {
+      if (sec.category_header) {
+        if (sec.category_header !== lastCategory) {
+          pdMainIdx += 1;
+          lastCategory = sec.category_header;
+          subIdx = 1;
+        } else {
+          subIdx += 1;
+        }
+        sec.volume_num = `Том ${pdMainIdx}.${subIdx}`;
+      } else {
+        pdMainIdx += 1;
+        lastCategory = null;
+        sec.volume_num = `Том ${pdMainIdx}`;
+      }
+    } else {
+      rdIdx += 1;
+      sec.volume_num = `Книга ${rdIdx}`;
+    }
+
     if (currentMode === "contract" && cipher) {
       sec.full_code = `${cipher}-${sec.code_mark}`;
     } else {
@@ -252,17 +393,142 @@ function recalculateCiphers() {
   renderSectionsTable();
 }
 
-// Синхронизация данных из инпутов в объект
 function syncProjectFromInputs() {
   if (!currentProject) return;
   currentProject.object_name = inputObjectName.value.trim();
   currentProject.customer = inputCustomer.value.trim();
   currentProject.contractor = inputContractor.value.trim();
-  currentProject.subcontractor = inputSubcontractor.value.trim();
   currentProject.contract_number = inputContractNumber.value.trim();
   currentProject.contract_date = inputContractDate.value.trim();
   currentProject.cipher = inputCipher.value.trim();
   currentProject.start_date = inputStartDate.value;
+  if (chkStagePd) currentProject.has_pd = chkStagePd.checked;
+  if (chkStageRd) currentProject.has_rd = chkStageRd.checked;
+}
+
+if (chkStagePd) {
+  chkStagePd.addEventListener("change", async () => {
+    if (!currentProject) return;
+    currentProject.has_pd = chkStagePd.checked;
+    if (!currentProject.has_pd) {
+      currentProject.sections.forEach((s) => {
+        if ((s.stage || "П") === "П") s.enabled = false;
+      });
+    } else {
+      const anyPd = currentProject.sections.some((s) => (s.stage || "П") === "П" && s.enabled);
+      if (!anyPd) {
+        currentProject.sections.forEach((s) => {
+          if ((s.stage || "П") === "П" && s.required_by_norm) s.enabled = true;
+        });
+      }
+    }
+    await syncSectionsWithBackend();
+  });
+}
+
+if (chkStageRd) {
+  chkStageRd.addEventListener("change", async () => {
+    if (!currentProject) return;
+    currentProject.has_rd = chkStageRd.checked;
+    if (!currentProject.has_rd) {
+      currentProject.sections.forEach((s) => {
+        if (s.stage === "Р") s.enabled = false;
+      });
+    } else {
+      const anyRd = currentProject.sections.some((s) => s.stage === "Р" && s.enabled);
+      if (!anyRd) {
+        const defaultMarks = new Set(["ГП", "АР", "КЖ", "ЭОМ", "ВК", "ОВ"]);
+        currentProject.sections.forEach((s) => {
+          if (s.stage === "Р" && defaultMarks.has(s.code_mark)) s.enabled = true;
+        });
+      }
+    }
+    await syncSectionsWithBackend();
+  });
+}
+
+async function syncSectionsWithBackend() {
+  if (!currentProject) return;
+  syncProjectFromInputs();
+  try {
+    const res = await fetch("/api/recalculate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentProject),
+    });
+    if (res.ok) {
+      currentProject = await res.json();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  renderSectionsTable();
+}
+
+// Добавление пользовательского раздела ПД или марки РД
+if (btnAddCustomPd) {
+  btnAddCustomPd.addEventListener("click", async () => {
+    if (!currentProject) return;
+    const code = prompt("Введите шифр/обозначение раздела ПД (например, ТХ или СТУ):", "СТУ");
+    if (!code) return;
+    const title = prompt("Введите наименование раздела ПД:", "Специальные технические условия");
+    if (!title) return;
+    currentProject.has_pd = true;
+    if (chkStagePd) chkStagePd.checked = true;
+    const newSec = {
+      id: "custom_pd_" + Date.now(),
+      stage: "П",
+      volume_num: "Том",
+      code_mark: code.trim(),
+      full_code: code.trim(),
+      title: title.trim(),
+      enabled: true,
+      required_by_norm: false,
+      source: "user",
+      note: "Добавлен пользователем",
+      category_header: null,
+    };
+    const firstRdIdx = currentProject.sections.findIndex((s) => s.stage === "Р");
+    if (firstRdIdx >= 0) {
+      currentProject.sections.splice(firstRdIdx, 0, newSec);
+    } else {
+      currentProject.sections.push(newSec);
+    }
+    await syncSectionsWithBackend();
+  });
+}
+
+if (btnAddCustomRd) {
+  btnAddCustomRd.addEventListener("click", async () => {
+    if (!currentProject) return;
+    const code = prompt("Введите марку основного комплекта РД (например, АТП, КМД, СКУД):", "АТП");
+    if (!code) return;
+    const title = prompt("Введите наименование комплекта РД:", "Автоматизация теплового пункта");
+    if (!title) return;
+    currentProject.has_rd = true;
+    if (chkStageRd) chkStageRd.checked = true;
+    currentProject.sections.push({
+      id: "custom_rd_" + Date.now(),
+      stage: "Р",
+      volume_num: "Книга",
+      code_mark: code.trim(),
+      full_code: code.trim(),
+      title: title.trim(),
+      enabled: true,
+      required_by_norm: false,
+      source: "user",
+      note: "Марка РД (добавлена пользователем)",
+      category_header: null,
+    });
+    await syncSectionsWithBackend();
+  });
+}
+
+if (btnSyncScheduleFromSections) {
+  btnSyncScheduleFromSections.addEventListener("click", async () => {
+    await rebuildScheduleBackend();
+    switchTab("schedule");
+  });
 }
 
 // Отрисовка таблицы разделов (Вкладка 1)
@@ -270,19 +536,44 @@ function renderSectionsTable() {
   if (!currentProject) return;
   sectionsTableBody.innerHTML = "";
 
-  let enabledCount = 0;
+  const pdEnabled = currentProject.sections.filter((s) => (s.stage || "П") === "П" && s.enabled).length;
+  const rdEnabled = currentProject.sections.filter((s) => s.stage === "Р" && s.enabled).length;
+  sectionsCountBadge.textContent = `ПД: ${pdEnabled} | РД: ${rdEnabled}`;
+
+  let lastStage = null;
   let lastCatHeader = null;
 
   currentProject.sections.forEach((sec, idx) => {
-    if (sec.enabled) enabledCount++;
+    const stage = sec.stage || "П";
 
-    // Группирующий заголовок (Раздел 5, Раздел 12, Раздел 13)
+    if (stage !== lastStage) {
+      lastStage = stage;
+      lastCatHeader = null;
+      const stageTr = document.createElement("tr");
+      if (stage === "П") {
+        stageTr.className = "bg-blue-900 text-white font-bold text-xs";
+        stageTr.innerHTML = `
+          <td colspan="5" class="py-2.5 px-4">
+            <i class="fa-solid fa-book-open mr-2"></i> СТАДИЯ «П» — ПРОЕКТНАЯ ДОКУМЕНТАЦИЯ (по ПП РФ № 87) — выбрано: ${pdEnabled}
+          </td>
+        `;
+      } else {
+        stageTr.className = "bg-cyan-900 text-white font-bold text-xs";
+        stageTr.innerHTML = `
+          <td colspan="5" class="py-2.5 px-4">
+            <i class="fa-solid fa-compass-drafting mr-2"></i> СТАДИЯ «Р» — РАБОЧАЯ ДОКУМЕНТАЦИЯ (по ГОСТ Р 21.101-2020) — выбрано: ${rdEnabled}
+          </td>
+        `;
+      }
+      sectionsTableBody.appendChild(stageTr);
+    }
+
     if (sec.category_header && sec.category_header !== lastCatHeader) {
       lastCatHeader = sec.category_header;
       const catTr = document.createElement("tr");
-      catTr.className = "bg-slate-50 font-bold text-xs text-slate-800";
+      catTr.className = "bg-slate-100 font-bold text-xs text-slate-800";
       catTr.innerHTML = `
-        <td colspan="5" class="py-2.5 px-4 border-t border-b border-slate-200">
+        <td colspan="5" class="py-2 px-4 border-t border-b border-slate-200">
           <i class="fa-solid fa-folder-tree text-blue-600 mr-2"></i> ${sec.category_header}
         </td>
       `;
@@ -290,22 +581,34 @@ function renderSectionsTable() {
     }
 
     const tr = document.createElement("tr");
-    tr.className = `hover:bg-blue-50/40 transition ${!sec.enabled ? "opacity-40 bg-slate-50" : ""}`;
+    tr.className = `hover:bg-blue-50/40 transition ${!sec.enabled ? "opacity-45 bg-slate-50/70" : ""}`;
+
+    let badgeHtml = "";
+    if (sec.source === "tz") {
+      badgeHtml = `<span class="ml-2 bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap">из ТЗ</span>`;
+    } else if (sec.source === "trigger") {
+      badgeHtml = `<span class="ml-2 bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap">по тексту ТЗ</span>`;
+    } else if (sec.source === "user") {
+      badgeHtml = `<span class="ml-2 bg-purple-100 text-purple-800 text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap">вручную</span>`;
+    }
 
     tr.innerHTML = `
-      <td class="py-2.5 px-4 text-center">
+      <td class="py-2 px-4 text-center">
         <input type="checkbox" class="section-chk w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500" data-idx="${idx}" ${sec.enabled ? "checked" : ""}>
       </td>
-      <td class="py-2.5 px-4 text-center font-mono text-xs font-semibold text-slate-600">
+      <td class="py-2 px-4 text-center font-mono text-xs font-semibold text-slate-600 whitespace-nowrap">
         ${sec.volume_num}
       </td>
-      <td class="py-2.5 px-4 text-center font-mono text-xs font-bold text-blue-700">
-        ${sec.full_code || sec.code_mark}
+      <td class="py-2 px-4 text-center font-mono text-xs font-bold ${stage === "Р" ? "text-cyan-700" : "text-blue-700"}">
+        <input type="text" class="w-28 text-center font-mono text-xs font-bold border-0 focus:ring-1 focus:ring-blue-400 rounded px-1 py-0.5 bg-transparent hover:bg-white" value="${sec.full_code || sec.code_mark}" data-field="code_mark" data-idx="${idx}">
       </td>
-      <td class="py-2.5 px-4">
-        <input type="text" class="w-full text-xs font-medium border-0 focus:ring-1 focus:ring-blue-400 rounded px-1.5 py-1 bg-transparent hover:bg-white" value="${sec.title}" data-field="title" data-idx="${idx}">
+      <td class="py-2 px-4">
+        <div class="flex items-center">
+          <input type="text" class="w-full text-xs font-medium border-0 focus:ring-1 focus:ring-blue-400 rounded px-1.5 py-1 bg-transparent hover:bg-white" value="${sec.title}" data-field="title" data-idx="${idx}">
+          ${badgeHtml}
+        </div>
       </td>
-      <td class="py-2.5 px-4">
+      <td class="py-2 px-4">
         <input type="text" class="w-full text-xs text-slate-500 border-0 focus:ring-1 focus:ring-blue-400 rounded px-1.5 py-1 bg-transparent hover:bg-white" placeholder="Примечание..." value="${sec.note || ""}" data-field="note" data-idx="${idx}">
       </td>
     `;
@@ -313,107 +616,506 @@ function renderSectionsTable() {
     sectionsTableBody.appendChild(tr);
   });
 
-  sectionsCountBadge.textContent = `${enabledCount} томов`;
-
   // Навешиваем слушатели чекбоксов и инпутов
   document.querySelectorAll(".section-chk").forEach((chk) => {
-    chk.addEventListener("change", (e) => {
-      const idx = e.target.dataset.idx;
-      currentProject.sections[idx].enabled = e.target.checked;
-      renderSectionsTable();
+    chk.addEventListener("change", async (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const isEnabled = e.target.checked;
+      const sec = currentProject.sections[idx];
+      sec.enabled = isEnabled;
+
+      if (isEnabled) {
+        if ((sec.stage || "П") === "П") {
+          currentProject.has_pd = true;
+          if (chkStagePd) chkStagePd.checked = true;
+        } else {
+          currentProject.has_rd = true;
+          if (chkStageRd) chkStageRd.checked = true;
+
+          // При включении марки РД автоматически включаем аналогичный раздел в ПД
+          const rdMap = currentProject.facility_type === "linear" ? RD_TO_PD_MAP_LINEAR : RD_TO_PD_MAP_CAPITAL;
+          const mappedPdIds = rdMap[sec.id] || [];
+          if (mappedPdIds.length > 0) {
+            currentProject.has_pd = true;
+            if (chkStagePd) chkStagePd.checked = true;
+            currentProject.sections.forEach((pSec) => {
+              if ((pSec.stage || "П") === "П" && mappedPdIds.includes(pSec.id)) {
+                pSec.enabled = true;
+              }
+            });
+          }
+        }
+      }
+      await syncSectionsWithBackend();
     });
   });
 
   document.querySelectorAll("input[data-field]").forEach((inp) => {
     inp.addEventListener("change", (e) => {
-      const idx = e.target.dataset.idx;
+      const idx = parseInt(e.target.dataset.idx, 10);
       const field = e.target.dataset.field;
       currentProject.sections[idx][field] = e.target.value;
+      if (field === "code_mark") recalculateCiphers();
     });
   });
 }
 
-// Кнопки "Выбрать все" / "Снять все"
-btnSelectAll.addEventListener("click", () => {
+btnSelectAll.addEventListener("click", async () => {
   if (!currentProject) return;
-  currentProject.sections.forEach((s) => (s.enabled = true));
-  renderSectionsTable();
+  const wantPd = chkStagePd ? chkStagePd.checked : true;
+  const wantRd = chkStageRd ? chkStageRd.checked : false;
+  currentProject.sections.forEach((s) => {
+    const st = s.stage || "П";
+    if (st === "П" && wantPd) s.enabled = true;
+    if (st === "Р" && wantRd) s.enabled = true;
+  });
+  await syncSectionsWithBackend();
 });
 
-btnUnselectAll.addEventListener("click", () => {
+btnUnselectAll.addEventListener("click", async () => {
   if (!currentProject) return;
   currentProject.sections.forEach((s) => (s.enabled = false));
-  renderSectionsTable();
+  await syncSectionsWithBackend();
 });
 
-// Отрисовка таблицы Календарного графика (Вкладка 2)
+// ==========================================
+// МОДУЛЬ: КАЛЕНДАРНЫЙ ГРАФИК (НЕДЕЛИ + МЕСЯЦЫ + WBS)
+// ==========================================
+
+const SCHEDULE_GROUPS = {
+  survey: { label: "1. Обследование и изыскания", barClass: "bg-emerald-500 hover:bg-emerald-600" },
+  pd: { label: "2. Проектная документация (ПД)", barClass: "bg-blue-600 hover:bg-blue-700" },
+  approval: { label: "3. Согласования", barClass: "bg-amber-500 hover:bg-amber-600" },
+  expertise: { label: "4. Экспертиза", barClass: "bg-purple-600 hover:bg-purple-700" },
+  rd: { label: "5. Рабочая документация (РД)", barClass: "bg-cyan-600 hover:bg-cyan-700" },
+  other: { label: "6. Прочие работы", barClass: "bg-slate-600 hover:bg-slate-700" },
+};
+
+const MONTH_NAMES_SHORT = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+
+function resolveScheduleLocal() {
+  if (!currentProject || !currentProject.schedule_phases) return;
+  const phases = currentProject.schedule_phases;
+  const byId = {};
+  phases.forEach((p, i) => {
+    if (!p.id) p.id = i + 1;
+    byId[p.id] = p;
+  });
+
+  for (let pass = 0; pass < phases.length; pass++) {
+    phases.forEach((p) => {
+      if (p.depends_on && p.depends_on.length > 0) {
+        let maxEnd = 0;
+        p.depends_on.forEach((pid) => {
+          const parent = byId[pid];
+          if (parent) {
+            const pDur = parent.milestone ? 0 : Math.max(1, parent.duration_weeks || 1);
+            const pEnd = (parent.start_week || 1) + pDur;
+            if (pEnd > maxEnd) maxEnd = pEnd;
+          }
+        });
+        if (maxEnd > 0) {
+          p.start_week = Math.max(1, maxEnd + (p.lag_weeks || 0));
+        }
+      }
+      p.start_week = Math.max(1, parseInt(p.start_week, 10) || 1);
+      p.duration_weeks = p.milestone ? 0 : Math.max(1, parseInt(p.duration_weeks, 10) || 1);
+    });
+  }
+}
+
+async function rebuildScheduleBackend(detailOverride = null) {
+  if (!currentProject) return;
+  syncProjectFromInputs();
+  if (detailOverride) currentProject.schedule_detail = detailOverride;
+  const q = currentProject.schedule_detail ? `?detail=${currentProject.schedule_detail}` : "";
+  try {
+    const res = await fetch(`/api/rebuild-schedule${q}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentProject),
+    });
+    if (res.ok) {
+      currentProject = await res.json();
+      renderScheduleTable();
+    }
+  } catch (err) {
+    console.error("Ошибка перестроения графика:", err);
+  }
+}
+
+if (btnSchedDetailSections) {
+  btnSchedDetailSections.addEventListener("click", () => rebuildScheduleBackend("sections"));
+}
+if (btnSchedDetailStages) {
+  btnSchedDetailStages.addEventListener("click", () => rebuildScheduleBackend("stages"));
+}
+if (btnRebuildSchedule) {
+  btnRebuildSchedule.addEventListener("click", () => rebuildScheduleBackend());
+}
+
+if (btnAddPhase) {
+  btnAddPhase.addEventListener("click", () => {
+    if (!currentProject) return;
+    const phases = currentProject.schedule_phases || [];
+    const maxId = phases.reduce((m, p) => Math.max(m, p.id || 0), 0);
+    const lastPhase = phases[phases.length - 1];
+    phases.push({
+      id: maxId + 1,
+      name: "Новый этап работ",
+      group: lastPhase ? lastPhase.group : "pd",
+      start_week: lastPhase ? lastPhase.start_week : 1,
+      duration_weeks: 3,
+      depends_on: lastPhase ? [lastPhase.id] : [],
+      lag_weeks: 0,
+      milestone: false,
+      note: "",
+    });
+    resolveScheduleLocal();
+    renderScheduleTable();
+  });
+}
+
+if (btnAddMilestone) {
+  btnAddMilestone.addEventListener("click", () => {
+    if (!currentProject) return;
+    const phases = currentProject.schedule_phases || [];
+    const maxId = phases.reduce((m, p) => Math.max(m, p.id || 0), 0);
+    const lastPhase = phases[phases.length - 1];
+    phases.push({
+      id: maxId + 1,
+      name: "Контрольная точка (веха)",
+      group: lastPhase ? lastPhase.group : "approval",
+      start_week: lastPhase ? lastPhase.start_week : 1,
+      duration_weeks: 0,
+      depends_on: lastPhase ? [lastPhase.id] : [],
+      lag_weeks: 0,
+      milestone: true,
+      note: "Контрольное событие",
+    });
+    resolveScheduleLocal();
+    renderScheduleTable();
+  });
+}
+
 function renderScheduleTable() {
   if (!currentProject || !currentProject.schedule_phases) return;
 
-  const maxMonth = currentProject.schedule_phases.reduce(
-    (max, p) => Math.max(max, p.start_month + p.duration_months - 1),
-    8
-  );
-  const numMonths = Math.max(maxMonth, 8);
-  totalDurationLabel.textContent = `${numMonths} месяцев`;
+  resolveScheduleLocal();
 
-  // Очистка и отрисовка шапки графика
-  scheduleHeaderRow.innerHTML = `
-    <th class="py-3 px-3 w-10 text-center">№</th>
-    <th class="py-3 px-4 w-72">Этап работ</th>
-  `;
-
-  for (let m = 1; m <= numMonths; m++) {
-    const th = document.createElement("th");
-    th.className = "py-3 px-2 text-center text-xs font-semibold w-16 bg-slate-700 border-l border-slate-600";
-    th.textContent = `${m} мес`;
-    scheduleHeaderRow.appendChild(th);
+  const detail = currentProject.schedule_detail || "sections";
+  if (btnSchedDetailSections && btnSchedDetailStages) {
+    if (detail === "sections") {
+      btnSchedDetailSections.className = "px-3 py-1.5 rounded-md font-semibold transition bg-blue-600 text-white shadow-xs";
+      btnSchedDetailStages.className = "px-3 py-1.5 rounded-md font-medium text-slate-600 hover:text-slate-900 transition";
+    } else {
+      btnSchedDetailStages.className = "px-3 py-1.5 rounded-md font-semibold transition bg-blue-600 text-white shadow-xs";
+      btnSchedDetailSections.className = "px-3 py-1.5 rounded-md font-medium text-slate-600 hover:text-slate-900 transition";
+    }
   }
 
-  const thNote = document.createElement("th");
-  thNote.className = "py-3 px-4 w-60 border-l border-slate-600";
-  thNote.textContent = "Примечание";
-  scheduleHeaderRow.appendChild(thNote);
+  const phases = currentProject.schedule_phases;
+  const maxWeekRaw = phases.reduce((max, p) => {
+    const endW = p.milestone ? p.start_week : p.start_week + Math.max(1, p.duration_weeks) - 1;
+    return Math.max(max, endW);
+  }, 8);
 
-  // Отрисовка строк этапов
+  const numMonths = Math.max(2, Math.ceil(maxWeekRaw / 4));
+  const numWeeks = numMonths * 4;
+  const approxMonths = (maxWeekRaw / 4.33).toFixed(1);
+  totalDurationLabel.textContent = `${maxWeekRaw} нед. (~${approxMonths} мес.)`;
+
+  let startDt = null;
+  if (inputStartDate && inputStartDate.value) {
+    const parsed = new Date(inputStartDate.value + "T00:00:00");
+    if (!isNaN(parsed.getTime())) startDt = parsed;
+  }
+  if (finishDateLabel) {
+    if (startDt) {
+      const endDt = new Date(startDt.getTime() + maxWeekRaw * 7 * 86400000);
+      finishDateLabel.textContent = endDt.toLocaleDateString("ru-RU");
+    } else {
+      finishDateLabel.textContent = "—";
+    }
+  }
+
+  // 1. Двухуровневая шапка с понятными названиями колонок
+  if (scheduleMonthHeaderRow) {
+    let mHtml = `
+      <th rowspan="2" class="py-2 px-2 w-12 text-center border-b border-slate-700" title="Порядковый номер этапа в графике">№<br>этапа</th>
+      <th rowspan="2" class="py-2 px-3 min-w-[240px] border-b border-slate-700">Наименование этапа / раздела</th>
+      <th rowspan="2" class="py-2 px-2 w-32 text-center border-l border-b border-slate-700">Вид работ</th>
+      <th rowspan="2" class="py-2 px-2 w-24 text-center border-l border-b border-slate-700" title="Укажите номер этапа, после окончания которого начинается этот этап (можно несколько через запятую)">Старт после<br>этапа №</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Смещение относительно предыдущего этапа в неделях (+ задержка, - параллельный нахлест)">Сдвиг,<br>нед.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Номер недели начала этапа от старта проекта">Начало,<br>нед.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.,<br>нед.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700">Действия</th>
+    `;
+    for (let m = 0; m < numMonths; m++) {
+      let label = `Месяц ${m + 1}`;
+      if (startDt) {
+        const mDate = new Date(startDt.getTime() + m * 30.4375 * 86400000);
+        label = `М${m + 1} (${MONTH_NAMES_SHORT[mDate.getMonth()]} ${String(mDate.getFullYear()).slice(-2)})`;
+      }
+      mHtml += `<th colspan="4" class="py-1.5 px-1 text-center text-[11px] font-bold bg-slate-800 border-l border-b border-slate-600">${label}</th>`;
+    }
+    mHtml += `<th rowspan="2" class="py-2 px-3 min-w-[160px] border-l border-b border-slate-700">Примечание</th>`;
+    scheduleMonthHeaderRow.innerHTML = mHtml;
+  }
+
+  let wHtml = "";
+  for (let w = 1; w <= numWeeks; w++) {
+    wHtml += `<th class="py-1 px-0.5 text-center text-[10px] font-mono w-7 bg-slate-700 border-l border-slate-600">Н${w}</th>`;
+  }
+  scheduleHeaderRow.innerHTML = wHtml;
+
+  // 2. Отрисовка строк графика с группировкой по видам работ
   scheduleTableBody.innerHTML = "";
+  let lastGroup = null;
+  const totalCols = 9 + numWeeks;
 
-  currentProject.schedule_phases.forEach((phase, idx) => {
+  phases.forEach((phase, idx) => {
+    const grp = phase.group || "pd";
+    if (grp !== lastGroup) {
+      lastGroup = grp;
+      const grpInfo = SCHEDULE_GROUPS[grp] || SCHEDULE_GROUPS.other;
+      const grpTr = document.createElement("tr");
+      grpTr.className = "bg-slate-100/90 font-bold text-[11px] text-slate-700 uppercase tracking-wider";
+      grpTr.innerHTML = `<td colspan="${totalCols}" class="py-1.5 px-3 border-t border-b border-slate-200">${grpInfo.label}</td>`;
+      scheduleTableBody.appendChild(grpTr);
+    }
+
     const tr = document.createElement("tr");
-    tr.className = "hover:bg-slate-50 transition border-b border-slate-100";
+    tr.className = `hover:bg-blue-50/30 transition border-b border-slate-100 ${phase.milestone ? "bg-amber-50/40" : ""}`;
 
-    const pStart = phase.start_month;
-    const pEnd = phase.start_month + phase.duration_months - 1;
+    const pStart = phase.start_week;
+    const pEnd = phase.milestone ? phase.start_week : phase.start_week + Math.max(1, phase.duration_weeks) - 1;
+    const grpInfo = SCHEDULE_GROUPS[grp] || SCHEDULE_GROUPS.other;
 
-    let monthCellsHtml = "";
-    for (let m = 1; m <= numMonths; m++) {
-      if (m >= pStart && m <= pEnd) {
-        monthCellsHtml += `
-          <td class="p-1 text-center border-l border-slate-200">
-            <div class="h-6 rounded gantt-bar flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
-              ${m === pStart ? phase.duration_months + "м" : "●"}
+    let groupOptionsHtml = "";
+    Object.entries(SCHEDULE_GROUPS).forEach(([gKey, gVal]) => {
+      const shortLbl = gVal.label.replace(/^\d+\.\s*/, "");
+      groupOptionsHtml += `<option value="${gKey}" ${gKey === grp ? "selected" : ""}>${shortLbl}</option>`;
+    });
+
+    let weekCellsHtml = "";
+    for (let w = 1; w <= numWeeks; w++) {
+      const isMonthStart = (w - 1) % 4 === 0;
+      const borderCls = isMonthStart ? "border-l border-slate-300" : "border-l border-slate-100";
+      if (phase.milestone) {
+        if (w === pStart) {
+          weekCellsHtml += `
+            <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните для переноса вехи на Н${w}">
+              <div class="h-5 flex items-center justify-center text-amber-600 text-sm font-black">◆</div>
+            </td>
+          `;
+        } else {
+          weekCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-amber-100/50 gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните для переноса вехи на Н${w}"></td>`;
+        }
+      } else if (w >= pStart && w <= pEnd) {
+        const isFirst = w === pStart;
+        const isLast = w === pEnd;
+        const roundCls = `${isFirst ? "rounded-l" : ""} ${isLast ? "rounded-r" : ""}`;
+        weekCellsHtml += `
+          <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-week="${w}" title="Н${pStart}–Н${pEnd} (${phase.duration_weeks} нед.). Клик = старт, Shift+клик = длительность">
+            <div class="h-5 ${roundCls} ${grpInfo.barClass} flex items-center justify-center text-white text-[9px] font-bold shadow-2xs">
+              ${isFirst ? phase.duration_weeks + "н" : ""}
             </div>
           </td>
         `;
       } else {
-        monthCellsHtml += `<td class="p-1 border-l border-slate-100"></td>`;
+        weekCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-blue-100/40 gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните, чтобы поставить начало на Н${w} (Shift+клик — растянуть длительность до Н${w})"></td>`;
       }
     }
 
+    const depsVal = (phase.depends_on || []).join(", ");
+    const hasDeps = phase.depends_on && phase.depends_on.length > 0;
+
     tr.innerHTML = `
-      <td class="py-2.5 px-3 text-center text-xs text-slate-500 font-mono">${idx + 1}</td>
-      <td class="py-2.5 px-4 font-medium text-xs text-slate-800">
-        ${phase.name}
-        <div class="flex items-center space-x-2 mt-1 text-[11px] text-slate-400">
-          <span>Старт: <b>${phase.start_month} мес</b></span>
-          <span>Длительность: <b>${phase.duration_months} мес</b></span>
+      <td class="py-1.5 px-2 text-center font-mono text-xs font-bold text-slate-600">${phase.id}</td>
+      <td class="py-1.5 px-2">
+        <div class="flex items-center gap-1">
+          <button class="sched-milestone-btn text-xs px-1 rounded ${phase.milestone ? "text-amber-600 font-bold" : "text-slate-300 hover:text-amber-500"}" data-idx="${idx}" title="Переключить: Этап / Контрольная веха ◆">◆</button>
+          <input type="text" class="sched-inp-name w-full text-xs ${phase.milestone ? "font-bold text-amber-900" : "font-medium text-slate-800"} border border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-0.5 bg-transparent" data-idx="${idx}" value="${phase.name}">
         </div>
       </td>
-      ${monthCellsHtml}
-      <td class="py-2.5 px-4 text-xs text-slate-500 border-l border-slate-100">${phase.note || ""}</td>
+      <td class="py-1.5 px-1.5 border-l border-slate-100">
+        <select class="sched-inp-group w-full text-[11px] border border-slate-200 rounded px-1 py-0.5 bg-white" data-idx="${idx}">
+          ${groupOptionsHtml}
+        </select>
+      </td>
+      <td class="py-1.5 px-1.5 border-l border-slate-100">
+        <input type="text" class="sched-inp-deps w-full text-center font-mono text-xs border border-slate-200 rounded px-1 py-0.5 bg-white" placeholder="нет" data-idx="${idx}" value="${depsVal}" title="Укажите номер этапа, после которого стартует этот этап (например: 1 или 1, 2)">
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <input type="number" step="1" min="-20" max="52" class="sched-inp-lag w-full text-center font-mono text-xs border border-slate-200 rounded px-1 py-0.5 ${hasDeps ? "bg-white" : "bg-slate-100 text-slate-400"}" data-idx="${idx}" value="${phase.lag_weeks || 0}" ${hasDeps ? "" : "disabled"} title="Смещение в неделях относительно окончания предыдущего этапа (+ задержка, - нахлест)">
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <input type="number" step="1" min="1" max="200" class="sched-inp-start w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${hasDeps ? "bg-slate-100 text-slate-500" : "bg-white text-blue-700"}" data-idx="${idx}" value="${phase.start_week}" title="Неделя начала работ от старта проекта">
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <input type="number" step="1" min="0" max="100" class="sched-inp-dur w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${phase.milestone ? "bg-slate-100 text-slate-400" : "bg-white"}" data-idx="${idx}" value="${phase.milestone ? 0 : phase.duration_weeks}" ${phase.milestone ? "disabled" : ""} title="Длительность этапа в неделях">
+      </td>
+      <td class="py-1.5 px-1 text-center border-l border-slate-100 whitespace-nowrap">
+        <button class="sched-move-up text-slate-400 hover:text-blue-600 px-1" data-idx="${idx}" title="Переместить выше"><i class="fa-solid fa-arrow-up"></i></button>
+        <button class="sched-move-down text-slate-400 hover:text-blue-600 px-1" data-idx="${idx}" title="Переместить ниже"><i class="fa-solid fa-arrow-down"></i></button>
+        <button class="sched-delete text-slate-400 hover:text-rose-600 px-1" data-idx="${idx}" title="Удалить строку"><i class="fa-solid fa-xmark"></i></button>
+      </td>
+      ${weekCellsHtml}
+      <td class="py-1.5 px-2 border-l border-slate-100">
+        <input type="text" class="sched-inp-note w-full text-xs text-slate-500 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-0.5 bg-transparent" placeholder="Примечание..." data-idx="${idx}" value="${phase.note || ""}">
+      </td>
     `;
 
     scheduleTableBody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".sched-inp-name").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].name = e.target.value;
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-note").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].note = e.target.value;
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-group").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].group = e.target.value;
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-deps").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const raw = e.target.value.trim();
+      if (!raw || raw === "—" || raw.toLowerCase() === "нет") {
+        phases[idx].depends_on = [];
+      } else {
+        const ids = raw
+          .split(/[,;\s]+/)
+          .map((x) => parseInt(x, 10))
+          .filter((n) => !isNaN(n) && n > 0 && n !== phases[idx].id);
+        phases[idx].depends_on = ids;
+      }
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-lag").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].lag_weeks = parseInt(e.target.value, 10) || 0;
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-start").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const newStart = Math.max(1, parseInt(e.target.value, 10) || 1);
+      phases[idx].depends_on = [];
+      phases[idx].start_week = newStart;
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-dur").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+      if (val === 0) {
+        phases[idx].milestone = true;
+        phases[idx].duration_weeks = 0;
+      } else {
+        phases[idx].milestone = false;
+        phases[idx].duration_weeks = val;
+      }
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-milestone-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      phases[idx].milestone = !phases[idx].milestone;
+      phases[idx].duration_weeks = phases[idx].milestone ? 0 : Math.max(1, phases[idx].duration_weeks || 2);
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-move-up").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      if (idx <= 0) return;
+      const tmp = phases[idx - 1];
+      phases[idx - 1] = phases[idx];
+      phases[idx] = tmp;
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-move-down").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      if (idx >= phases.length - 1) return;
+      const tmp = phases[idx + 1];
+      phases[idx + 1] = phases[idx];
+      phases[idx] = tmp;
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-delete").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      const removedId = phases[idx].id;
+      phases.splice(idx, 1);
+      phases.forEach((p) => {
+        if (p.depends_on) {
+          p.depends_on = p.depends_on.filter((d) => d !== removedId);
+        }
+      });
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".gantt-cell").forEach((cell) => {
+    cell.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      const clickedWeek = parseInt(e.currentTarget.dataset.week, 10);
+      const p = phases[idx];
+      if (!p) return;
+
+      if (e.shiftKey && !p.milestone) {
+        if (clickedWeek >= p.start_week) {
+          p.duration_weeks = clickedWeek - p.start_week + 1;
+        } else {
+          const oldEnd = p.start_week + p.duration_weeks - 1;
+          p.depends_on = [];
+          p.start_week = clickedWeek;
+          p.duration_weeks = Math.max(1, oldEnd - clickedWeek + 1);
+        }
+      } else {
+        p.depends_on = [];
+        p.start_week = clickedWeek;
+      }
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
   });
 }
 
@@ -423,16 +1125,22 @@ tabBtnSchedule.addEventListener("click", () => switchTab("schedule"));
 
 function switchTab(tab) {
   activeTab = tab;
+
+  [tabBtnSections, tabBtnSchedule].forEach((btn) => {
+    if (btn) {
+      btn.className = "py-3.5 px-4 font-medium text-sm text-slate-500 hover:text-slate-800 border-b-2 border-transparent flex items-center";
+    }
+  });
+
+  tabContentSections.classList.add("hidden");
+  tabContentSchedule.classList.add("hidden");
+
   if (tab === "sections") {
     tabBtnSections.className = "py-3.5 px-4 font-semibold text-sm border-b-2 border-blue-600 text-blue-600 flex items-center";
-    tabBtnSchedule.className = "py-3.5 px-4 font-medium text-sm text-slate-500 hover:text-slate-800 border-b-2 border-transparent flex items-center";
     tabContentSections.classList.remove("hidden");
-    tabContentSchedule.classList.add("hidden");
-  } else {
+  } else if (tab === "schedule") {
     tabBtnSchedule.className = "py-3.5 px-4 font-semibold text-sm border-b-2 border-blue-600 text-blue-600 flex items-center";
-    tabBtnSections.className = "py-3.5 px-4 font-medium text-sm text-slate-500 hover:text-slate-800 border-b-2 border-transparent flex items-center";
     tabContentSchedule.classList.remove("hidden");
-    tabContentSections.classList.add("hidden");
     renderScheduleTable();
   }
 }
@@ -458,9 +1166,8 @@ btnDownloadDocx.addEventListener("click", async () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    
-    // Получаем имя файла из заголовка или по умолчанию
-    let fname = "Состав_проекта.docx";
+
+    let fname = "Ведомость_состава_проекта.docx";
     if (currentMode === "contract" && currentProject.cipher) {
       fname = `${currentProject.cipher}_Состав_проекта.docx`;
     }
@@ -473,7 +1180,7 @@ btnDownloadDocx.addEventListener("click", async () => {
     alert("Ошибка: " + err.message);
   } finally {
     btnDownloadDocx.disabled = false;
-    btnDownloadDocx.innerHTML = '<i class="fa-solid fa-file-word mr-2 text-blue-200"></i> Скачать Состав проекта (.docx)';
+    btnDownloadDocx.innerHTML = '<i class="fa-solid fa-file-word mr-2 text-blue-200"></i> Скачать Ведомость состава проекта (.docx)';
   }
 });
 
@@ -498,7 +1205,7 @@ btnDownloadXlsx.addEventListener("click", async () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    
+
     let fname = "Календарный_график.xlsx";
     if (currentMode === "contract" && currentProject.cipher) {
       fname = `${currentProject.cipher}_График_работ.xlsx`;
@@ -512,6 +1219,6 @@ btnDownloadXlsx.addEventListener("click", async () => {
     alert("Ошибка: " + err.message);
   } finally {
     btnDownloadXlsx.disabled = false;
-    btnDownloadXlsx.innerHTML = '<i class="fa-solid fa-file-excel mr-2 text-emerald-200"></i> Скачать График работ (.xlsx)';
+    btnDownloadXlsx.innerHTML = '<i class="fa-solid fa-calendar-days mr-2 text-emerald-200"></i> Скачать Календарный график (.xlsx)';
   }
 });

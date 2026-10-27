@@ -1,13 +1,16 @@
+import datetime
 import io
 import re
-from typing import List, Tuple
-from app.models import FacilityType, ProjectData, ProjectMode
+from typing import Dict, List, Optional, Set, Tuple
+from app.models import FacilityType, ProjectData, ProjectMode, SectionItem
 from app.services.pp87_rules import (
+    RD_CATALOG,
     apply_volume_ciphers,
+    build_rd_sections,
+    build_schedule,
     compute_cipher_from_contract,
     get_default_capital_sections,
     get_default_linear_sections,
-    get_default_schedule,
 )
 
 
@@ -22,9 +25,13 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
                 full_text.append(p.text.strip())
         for table in doc.tables:
             for row in table.rows:
-                row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if row_text:
-                    full_text.append(" | ".join(row_text))
+                seen = []
+                for cell in row.cells:
+                    t = cell.text.strip()
+                    if t and (not seen or seen[-1] != t):
+                        seen.append(t)
+                if seen:
+                    full_text.append(" | ".join(seen))
         return "\n".join(full_text)
     except Exception as e:
         return f"Ошибка чтения docx: {e}"
@@ -45,39 +52,721 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         return f"Ошибка чтения pdf: {e}"
 
 
+# ---------------------------------------------------------------------------
+# Словари распознавания разделов ПД (ПП РФ № 87) и марок РД (ГОСТ Р 21.101)
+# Поддерживают как официальные названия по ПП 87, так и живые инженерные формулировки из ТЗ
+# ---------------------------------------------------------------------------
+
+PD_CODE_PATTERNS: Dict[str, List[str]] = {
+    "pz": [
+        r"(?<![а-яёa-z0-9])пз(?![а-яёa-z0-9])",
+        r"пояснительн\w+\s+записк\w*",
+    ],
+    "pzu": [
+        r"(?<![а-яёa-z0-9])(?:пзу|спозу)(?![а-яёa-z0-9])",
+        r"схем\w+\s+планировочн\w+\s+организац\w+",
+        r"планировочн\w+\s+организац\w+\s+земельн\w+\s+участк\w*",
+        r"благоустройств\w+\s+(?:и\s+озеленени\w+\s+)?территори\w*",
+        r"генеральн\w+\s+план\w*",
+    ],
+    "ar": [
+        r"(?<![а-яёa-z0-9])ар(?![а-яёa-z0-9])",
+        r"архитектурн\w+\s+решени\w*",
+        r"архитектурно[\-\s]строительн\w+",
+    ],
+    "kr": [
+        r"(?<![а-яёa-z0-9])кр(?![а-яёa-z0-9])",
+        r"конструктивн\w+\s+(?:и\s+объемно[\-\s]планировочн\w+\s+)?решени\w*",
+        r"объемно[\-\s]планировочн\w+\s+и\s+конструктивн\w+\s+решени\w*",
+        r"строительн\w+\s+част[ьию]\b",
+        r"строительн\w+\s+конструкци\w*",
+        r"фундамент\w*\s+под\s+оборудован",
+    ],
+    "ios1": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*1(?![0-9])",
+        r"раздел\s*№?\s*5\.1(?![0-9])",
+        r"подраздел\s*№?\s*1\b[^\n]{0,40}электро",
+        r"электроснабжени[еяюем]\b",
+        r"силов\w+\s+электрооборудовани\w*",
+        r"электроосвещени[еяюем]\b",
+    ],
+    "ios2": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*2(?![0-9])",
+        r"раздел\s*№?\s*5\.2(?![0-9])",
+        r"подраздел\s*№?\s*2\b[^\n]{0,40}водоснабж",
+        r"водоснабжени[еяюем]\b",
+        r"участк\w+\s+водопровод\w*",
+        r"сет[иейям]\s+водопровод\w*",
+        r"реконструируем\w+\s+водопровод\w*",
+    ],
+    "ios3": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*3(?![0-9])",
+        r"раздел\s*№?\s*5\.3(?![0-9])",
+        r"подраздел\s*№?\s*3\b[^\n]{0,40}водоотвед",
+        r"водоотведени[еяюем]\b",
+        r"канализаци[ияюей]\b",
+    ],
+    "ios4": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*4(?![0-9])",
+        r"раздел\s*№?\s*5\.4(?![0-9])",
+        r"подраздел\s*№?\s*4\b[^\n]{0,40}(?:отоплен|вентиляц|теплов)",
+        r"отоплени[еяюем]\s+и\s+вентиляци\w*",
+        r"отоплени[еяю]\s*,?\s*вентиляци\w*",
+        r"вентиляци\w*\s+и\s+кондиционировани\w*",
+        r"теплоснабжени[еяюем]\b",
+    ],
+    "ios5_1": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*5(?:\.1)?(?![0-9\.]|\.\d)",
+        r"раздел\s*№?\s*5\.5(?:\.1)?(?![0-9])",
+        r"подраздел\s*№?\s*5\b[^\n]{0,40}связ",
+        r"сет[иейям]\s+связи",
+        r"канал\w*\s+связи",
+        r"средств\w*\s+связи",
+        r"видеонаблюдени[еяюем]\b",
+        r"слаботочн\w+\s+(?:сет\w*|систем\w*)",
+        r"структурированн\w+\s+кабельн\w+\s+систем\w*",
+    ],
+    "ios5_2": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*5\.2(?![0-9])",
+        r"раздел\s*№?\s*5\.5\.2(?![0-9])",
+        r"(?<![а-яёa-z0-9])(?:кипиа|кип|асутп|асу\s*тп)(?![а-яёa-z0-9])",
+        r"автоматизац\w+\s+комплексн\w*",
+        r"автоматизац\w+\s+и\s+диспетчеризац\w*",
+        r"диспетчеризац\w+",
+        r"автоматизац\w+\s+технологическ\w+",
+    ],
+    "ios6": [
+        r"(?<![а-яёa-z0-9])иос\s*[\-\.]?\s*6(?![0-9])",
+        r"раздел\s*№?\s*5\.6(?![0-9])",
+        r"подраздел\s*№?\s*6\b[^\n]{0,40}газоснабж",
+        r"газоснабжени[еяюем]\b",
+        r"газопотреблени\w*",
+    ],
+    "tx": [
+        r"(?<![а-яёa-z0-9])(?:тх|иос\s*[\-\.]?\s*7)(?![а-яёa-z0-9])",
+        r"раздел\s*№?\s*6(?:\b|\.)[^\n]{0,40}технолог",
+        r"подраздел\s*№?\s*7\b[^\n]{0,40}технолог",
+        r"технологическ\w+\s+решени\w*",
+        r"технологическ\w+\s+схем\w*",
+        r"технологическ\w+\s+част[ьию]\b",
+        r"очистк\w+\s+вод\w*",
+        r"станци\w+\s+водоочистк\w*",
+        r"водоподготовк\w*",
+    ],
+    "pos": [
+        r"(?<![а-яёa-z0-9])пос(?![а-яёa-z0-9])",
+        r"проект\w*\s+организац\w+\s+строительств\w*",
+        r"организац\w+\s+строительств\w*",
+    ],
+    "pod": [
+        r"(?<![а-яёa-z0-9])под(?![а-яёa-z0-9])",
+        r"проект\w*\s+организац\w+\s+работ\s+по\s+сносу",
+        r"работ\w*\s+по\s+сносу\s+или\s+демонтаж\w*",
+        r"работ\w*\s+по\s+сносу\s+\(демонтажу\)",
+        r"снос\w*\s+(?:и\s+)?демонтаж\w*",
+    ],
+    "oos": [
+        r"(?<![а-яёa-z0-9])(?:оос|моос|пмоос)(?![а-яёa-z0-9])",
+        r"мероприяти\w+\s+по\s+охран\w+\s+окружающ\w+\s+сред\w*",
+        r"охран\w+\s+окружающ\w+\s+сред\w*",
+    ],
+    "pb": [
+        r"(?<![а-яёa-z0-9])(?:мпб|ппм|пб)(?![а-яёa-z0-9])",
+        r"мероприяти\w+\s+по\s+обеспечени\w+\s+пожарн\w+\s+безопасност\w*",
+        r"обеспечени\w+\s+пожарн\w+\s+безопасност\w*",
+        r"пожарн\w+\s+сигнализац\w*",
+    ],
+    "tbe": [
+        r"(?<![а-яёa-z0-9])тбэ(?![а-яёa-z0-9])",
+        r"требовани\w+\s+к\s+обеспечени\w+\s+безопасн\w+\s+эксплуатац\w*",
+        r"безопасн\w+\s+эксплуатац\w+\s+объект\w*",
+    ],
+    "odi": [
+        r"(?<![а-яёa-z0-9])(?:оди|моди)(?![а-яёa-z0-9])",
+        r"обеспечени\w+\s+доступ\w+\s+инвалид\w*",
+        r"доступност\w+\s+для\s+(?:инвалид\w+|маломобильн\w+)",
+    ],
+    "ee": [
+        r"(?<![а-яёa-z0-9])ээ(?![а-яёa-z0-9])",
+        r"энергетическ\w+\s+эффективност\w*",
+        r"энергоэффективност\w*",
+    ],
+    "sm": [
+        r"(?<![а-яёa-z0-9])(?:см|ссрсс)(?![а-яёa-z0-9\.])",
+        r"раздел\s*№?\s*12(?:\.1)?(?![0-9])",
+        r"смет\w+\s+на\s+строительств\w*",
+        r"сводн\w+\s+сметн\w+\s+расчет",
+        r"сметн\w+\s+документац\w*",
+    ],
+    "sm_p": [
+        r"(?<![а-яёa-z0-9])см\.п(?![а-яёa-z0-9])",
+        r"раздел\s*№?\s*12\.2(?![0-9])",
+        r"конъюнктурн\w+\s+анализ",
+    ],
+    "sm_vor": [
+        r"(?<![а-яёa-z0-9])(?:см\.вор|вор)(?![а-яёa-z0-9])",
+        r"раздел\s*№?\s*12\.3(?![0-9])",
+        r"ведомост\w+\s+объемов\s+работ",
+    ],
+    "gochs": [
+        r"(?<![а-яёa-z0-9])(?:гочс|пм\s*гочс|итм\s*гочс)(?![а-яёa-z0-9])",
+        r"(?<![а-яёa-z0-9])го\s*и\s*чс(?![а-яёa-z0-9])",
+        r"гражданск\w+\s+оборон\w+",
+        r"гост\s*р\s*22\.2\.13",
+    ],
+    "ots": [
+        r"(?<![а-яёa-z0-9])отс(?![а-яёa-z0-9])",
+        r"обследовани\w+\s+техническ\w+\s+состояни\w*",
+        r"техническ\w+\s+обследовани\w+",
+        r"гост\s*31937",
+    ],
+    # Линейные разделы
+    "ppo": [
+        r"(?<![а-яёa-z0-9])ппо(?![а-яёa-z0-9])",
+        r"проект\w*\s+полос\w+\s+отвода",
+    ],
+    "tkr": [
+        r"(?<![а-яёa-z0-9])ткр(?![а-яёa-z0-9])",
+        r"технологическ\w+\s+и\s+конструктивн\w+\s+решени\w+\s+линейн\w+",
+    ],
+    "lin_infra": [
+        r"(?<![а-яёa-z0-9])(?:ило|зси)(?![а-яёa-z0-9])",
+        r"входящ\w+\s+в\s+инфраструктур\w+\s+линейн\w+",
+    ],
+    "rekult": [
+        r"(?<![а-яёa-z0-9])прз(?![а-яёa-z0-9])",
+        r"проект\w*\s+рекультивац\w+",
+        r"рекультивац\w+\s+(?:нарушенн\w+\s+)?земел",
+    ],
+}
+
+# Паттерны марок РД (ГОСТ Р 21.101) — как по буквенным маркам, так и по инженерным дисциплинам
+RD_MARK_PATTERNS: Dict[str, List[str]] = {
+    "rd_gp": [
+        r"(?<![а-яёa-z0-9])гп(?![а-яёa-z0-9])",
+        r"генеральн\w+\s+план\w*",
+        r"благоустройств\w+",
+    ],
+    "rd_ar": [
+        r"архитектурн\w+\s+решени\w*",
+    ],
+    "rd_as": [
+        r"(?<![а-яёa-z0-9])ас(?![а-яёa-z0-9])",
+        r"архитектурно[\-\s]строительн\w+\s+решени\w*",
+        r"строительн\w+\s+част[ьию]\b",
+    ],
+    "rd_kzh": [
+        r"(?<![а-яёa-z0-9])кж(?![а-яёa-z0-9])",
+        r"конструкци\w+\s+железобетонн\w*",
+        r"железобетонн\w+\s+конструкци\w*",
+    ],
+    "rd_km": [
+        r"(?<![а-яёa-z0-9])км(?![а-яёa-z0-9])",
+        r"конструкци\w+\s+металлическ\w*",
+        r"металлическ\w+\s+конструкци\w*",
+    ],
+    "rd_kd": [
+        r"(?<![а-яёa-z0-9])кд(?![а-яёa-z0-9])",
+        r"конструкци\w+\s+деревянн\w*",
+        r"деревянн\w+\s+конструкци\w*",
+    ],
+    "rd_eom": [
+        r"(?<![а-яёa-z0-9])(?:эом|эо|эм)(?![а-яёa-z0-9])",
+        r"силов\w+\s+электрооборудовани\w*",
+        r"электроосвещени\w*",
+        r"электроснабжени[еяюем]\b",
+    ],
+    "rd_es": [
+        r"(?<![а-яёa-z0-9])(?:эс|эн)(?![а-яёa-z0-9])",
+        r"наружн\w+\s+сет\w+\s+электроснабжени\w*",
+    ],
+    "rd_vk": [
+        r"(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])",
+        r"внутренн\w+\s+(?:систем\w+\s+)?водоснабжени\w*\s+и\s+канализац\w*",
+        r"водоснабжени[еяюем]\s+и\s+водоотведени\w*",
+    ],
+    "rd_nvk": [
+        r"(?<![а-яёa-z0-9])нвк(?![а-яёa-z0-9])",
+        r"наружн\w+\s+сет\w+\s+водоснабжени\w*",
+        r"наружн\w+\s+сет\w+\s+водоотведени\w*",
+        r"наружн\w+\s+сет\w+\s+канализац\w*",
+        r"участк\w+\s+водопровод\w*",
+        r"сет[иейям]\s+водопровод\w*",
+        r"реконструируем\w+\s+водопровод\w*",
+    ],
+    "rd_ov": [
+        r"(?<![а-яёa-z0-9])(?:овик|ов)(?![а-яёa-z0-9])",
+        r"отоплени[еяюем]\s+и\s+вентиляци\w*",
+        r"отоплени[еяю]\s*,?\s*вентиляци\w*",
+    ],
+    "rd_ts": [
+        r"(?<![а-яёa-z0-9])тс(?![а-яёa-z0-9])",
+        r"теплов\w+\s+сет\w*",
+    ],
+    "rd_ss": [
+        r"(?<![а-яёa-z0-9])сс(?![а-яёa-z0-9])",
+        r"канал\w*\s+связи",
+        r"сет[иейям]\s+связи",
+        r"видеонаблюдени[еяюем]\b",
+        r"слаботочн\w+\s+(?:сет\w*|систем\w*)",
+    ],
+    "rd_ak": [
+        r"(?<![а-яёa-z0-9])(?:ак|атх|авк|аов|кипиа|кип|асутп|асу\s*тп)(?![а-яёa-z0-9])",
+        r"автоматизац\w+\s+и\s+диспетчеризац\w*",
+        r"диспетчеризац\w+",
+    ],
+    "rd_gsn": [
+        r"(?<![а-яёa-z0-9])(?:гсн|гсв)(?![а-яёa-z0-9])",
+        r"газоснабжени[еяюем]\b",
+    ],
+    "rd_tx": [
+        r"(?<![а-яёa-z0-9])тх(?![а-яёa-z0-9])",
+        r"технологическ\w+\s+решени\w*",
+        r"технологическ\w+\s+схем\w*",
+        r"очистк\w+\s+вод\w*",
+        r"станци\w+\s+водоочистк\w*",
+        r"водоподготовк\w*",
+    ],
+    "rd_aps": [
+        r"(?<![а-яёa-z0-9])(?:апс|соуэ|аупт)(?![а-яёa-z0-9])",
+        r"пожарн\w+\s+сигнализац\w*",
+    ],
+    "rd_ad": [
+        r"(?<![а-яёa-z0-9])ад(?![а-яёa-z0-9])",
+        r"автомобильн\w+\s+дорог\w*",
+    ],
+    "rd_sm": [
+        r"сметн\w+\s+документац\w*",
+        r"сводн\w+\s+сметн\w+\s+расчет",
+    ],
+}
+
+PD_TO_RD_DEFAULT: Dict[str, str] = {
+    "pzu": "rd_gp",
+    "ar": "rd_ar",
+    "kr": "rd_kzh",
+    "ios1": "rd_eom",
+    "ios2": "rd_vk",
+    "ios3": "rd_nvk",
+    "ios4": "rd_ov",
+    "ios5_1": "rd_ss",
+    "ios5_2": "rd_ak",
+    "ios6": "rd_gsn",
+    "tx": "rd_tx",
+    "sm": "rd_sm",
+    "ppo": "rd_gp",
+    "tkr": "rd_nvk",
+    "lin_infra": "rd_as",
+}
+
+RD_TO_PD_CAPITAL: Dict[str, List[str]] = {
+    "rd_gp": ["pzu"],
+    "rd_ar": ["ar"],
+    "rd_as": ["ar", "kr"],
+    "rd_kzh": ["kr"],
+    "rd_km": ["kr"],
+    "rd_kd": ["kr"],
+    "rd_eom": ["ios1"],
+    "rd_es": ["ios1"],
+    "rd_vk": ["ios2", "ios3"],
+    "rd_nvk": ["ios2", "ios3"],
+    "rd_ov": ["ios4"],
+    "rd_ts": ["ios4"],
+    "rd_ss": ["ios5_1"],
+    "rd_ak": ["ios5_2"],
+    "rd_gsn": ["ios6"],
+    "rd_tx": ["tx"],
+    "rd_aps": ["pb"],
+    "rd_ad": ["pzu"],
+    "rd_sm": ["sm"],
+}
+
+RD_TO_PD_LINEAR: Dict[str, List[str]] = {
+    "rd_gp": ["ppo"],
+    "rd_ar": ["lin_infra"],
+    "rd_as": ["lin_infra"],
+    "rd_kzh": ["tkr"],
+    "rd_km": ["tkr"],
+    "rd_kd": ["tkr"],
+    "rd_eom": ["tkr"],
+    "rd_es": ["tkr"],
+    "rd_vk": ["tkr"],
+    "rd_nvk": ["tkr"],
+    "rd_ov": ["tkr"],
+    "rd_ts": ["tkr"],
+    "rd_ss": ["tkr"],
+    "rd_ak": ["tkr"],
+    "rd_gsn": ["tkr"],
+    "rd_tx": ["tkr"],
+    "rd_aps": ["pb"],
+    "rd_ad": ["tkr"],
+    "rd_sm": ["sm"],
+}
+
+# 1. Комплект СТРОГО для получения Разрешения на строительство (ч. 7 ст. 51 ГрК РФ) — остальные галочки сняты
+PERMIT_BASE_CAPITAL: Set[str] = {
+    "pz", "pzu", "ar", "kr", "ios1", "ios2", "ios3", "ios4", "ios5_1", "pos", "pb"
+}
+PERMIT_BASE_LINEAR: Set[str] = {
+    "pz", "ppo", "tkr", "lin_infra", "pos", "pb"
+}
+
+# 2. Базовый обязательный комплект для прохождения Экспертизы ПД (ПП РФ № 87)
+EXPERTISE_BASE_CAPITAL: Set[str] = {
+    "pz", "pzu", "ar", "kr", "ios1", "ios2", "ios3", "ios4", "ios5_1", "pos", "oos", "pb", "tbe", "ee"
+}
+EXPERTISE_BASE_LINEAR: Set[str] = {
+    "pz", "ppo", "tkr", "lin_infra", "pos", "oos", "pb", "tbe"
+}
+
+
+def map_rd_to_pd_ids(rd_ids: Set[str], facility_type: FacilityType) -> Set[str]:
+    """Возвращает множество id разделов ПД, аналогичных переданным маркам РД."""
+    mapping = RD_TO_PD_LINEAR if facility_type == FacilityType.LINEAR else RD_TO_PD_CAPITAL
+    res: Set[str] = set()
+    for rid in rd_ids:
+        for pid in mapping.get(rid, []):
+            res.add(pid)
+    return res
+
+
+def map_pd_to_rd_ids(pd_ids: Set[str], text_lower: str = "") -> Set[str]:
+    """Возвращает множество id марок РД, аналогичных найденным разделам ПД (с учетом текста ТЗ)."""
+    res: Set[str] = set()
+    for pid in pd_ids:
+        if pid in PD_TO_RD_DEFAULT:
+            res.add(PD_TO_RD_DEFAULT[pid])
+    if "kr" in pd_ids and re.search(r"строительн\w+\s+част[ьию]\b", text_lower):
+        res.add("rd_as")
+    if "ios2" in pd_ids and re.search(r"(?:наружн\w+\s+сет\w+\s+водоснабж|участк\w+\s+водопровод|реконструируем\w+\s+водопровод)", text_lower):
+        res.add("rd_nvk")
+    return res
+
+
+def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityType) -> Tuple[bool, bool, str, Set[str], Set[str]]:
+    """
+    Анализирует текст ТЗ и определяет:
+    - has_pd: требуется ли проектная документация
+    - has_rd: требуется ли рабочая документация
+    - auto_preset:
+        * "tz" — если явно указан состав разделов / инженерных дисциплин в ТЗ (без экспертизы)
+        * "expertise" — если указана экспертиза ПД (комплект для экспертизы + разделы из ТЗ)
+        * "permit" — если в ТЗ вообще не указаны разделы и нет экспертизы (строго комплект для РнС)
+    - explicit_pd: все разделы ПД, найденные в тексте ТЗ (включая аналоги марок РД)
+    - explicit_rd: все марки РД, найденные в тексте ТЗ (включая аналоги разделов ПД)
+    """
+    text_lower = raw_text.lower()
+
+    mentions_pd = bool(re.search(
+        r"(?:проектн\w+\s+документац|проектно[\-\s]сметн\w+|проектн\w+/рабоч\w+|проектн\w+\s+и\s+рабоч\w+|(?<![а-яёa-z0-9])пд(?![а-яёa-z0-9])|стади[ияю]\s*[«\"']?п[»\"']?(?:\b|$)|раздел\w*\s+проектн|проектн\w+\s+решени\w*)",
+        text_lower
+    ))
+    mentions_rd = bool(re.search(
+        r"(?:рабоч\w+\s+документац|проектн\w+/рабоч\w+|проектн\w+\s+и\s+рабоч\w+|(?<![а-яёa-z0-9])рд(?![а-яёa-z0-9])|рабочи[ех]\s+чертеж|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|марк[аиуе]\s+[а-яё]{2,5}(?![а-яё]))",
+        text_lower
+    ))
+    mentions_only_pd = bool(re.search(
+        r"(?:только\s+проектн\w+\s+документац|без\s+рабоч\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*пд)",
+        text_lower
+    ))
+
+    explicit_pd: Set[str] = set()
+    explicit_rd: Set[str] = set()
+
+    # ШАГ 1. Ищем все разделы ПД и инженерные дисциплины по всему тексту ТЗ
+    for sec_id, patterns in PD_CODE_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, text_lower):
+                explicit_pd.add(sec_id)
+                break
+
+    if "sm_p" in explicit_pd or "sm_vor" in explicit_pd:
+        explicit_pd.add("sm")
+
+    # ШАГ 2. Ищем все марки и дисциплины РД по всему тексту ТЗ
+    for rd_id, patterns in RD_MARK_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, text_lower):
+                explicit_rd.add(rd_id)
+                break
+
+    # Признаки явно ограниченного в 1 раздел ТЗ
+    single_pd_hint = bool(re.search(r"(?:один|одного|1)\s+раздел\w*\s+(?:проектн\w+|(?<![а-яёa-z0-9])пд(?![а-яёa-z0-9]))", text_lower))
+    single_rd_hint = bool(re.search(r"(?:один|одного|1)\s+(?:раздел\w*|комплект\w*|марк\w*)\s+(?:рабоч\w+|(?<![а-яёa-z0-9])рд(?![а-яёa-z0-9]))", text_lower))
+    explicit_list_hint = bool(re.search(
+        r"(?:состав\s+проект\w*\s*[:\-]|состав\s+разрабатываем\w+\s+документац\w*\s*[:\-]|разработать\s+(?:следующ\w+\s+)?раздел\w*|в\s+составе\s+раздел\w*|в\s+объеме\s+раздел\w*|перечень\s+разрабатываем\w+\s+раздел\w*|только\s+раздел\w*|проектными\s+решениями[^\n]{0,60}предусмотрено)",
+        text_lower
+    ))
+
+    # ПРАВИЛО ДВУСТОРОННЕЙ СВЯЗКИ ПД <-> РД:
+    # 1) Если найдены марки/дисциплины РД -> автоматически добавляем аналогичные разделы в ПД
+    if explicit_rd and not (single_pd_hint and explicit_pd):
+        explicit_pd |= map_rd_to_pd_ids(explicit_rd, facility_type)
+
+    # 2) Если найдены разделы/дисциплины ПД -> автоматически формируем аналогичные марки в РД
+    if explicit_pd and not (single_rd_hint and explicit_rd):
+        explicit_rd |= map_pd_to_rd_ids(explicit_pd, text_lower)
+
+    has_pd = True
+    # Включаем РД, если она упомянута явно ИЛИ если в ТЗ перечислены инженерные разделы/марки (и нет запрета «только ПД»)
+    has_rd = (mentions_rd or bool(explicit_rd)) and not mentions_only_pd
+
+    demands_full_pp87 = bool(re.search(
+        r"(?:состав\s+разделов\s+принять\s+согласно\s+постановлени\w*[^\n]{0,50}№\s*87|в\s+полном\s+объеме[^\n]{0,40}№\s*87)",
+        text_lower
+    ))
+    has_expertise_mention = bool(re.search(
+        r"(?:государственн\w+\s+экспертиз|негосударственн\w+\s+экспертиз|экспертиз\w+\s+проектн\w+\s+документац|прохождени\w+\s+экспертиз|положительн\w+\s+заключени\w+\s+экспертиз|достоверност\w+\s+(?:определения\s+)?сметн\w+\s+стоимост|главгосэкспертиз|мосгосэкспертиз|гау\s+«?угэц)",
+        text_lower
+    ))
+
+    # ВЫБОР НАИБОЛЕЕ ПОДХОДЯЩЕГО ВАРИАНТА ПО УМОЛЧАНИЮ:
+    # 1) Если указана экспертиза ПД (и это не точечное ТЗ на 1-2 раздела) -> "expertise" (Для Экспертизы ПД + разделы из ТЗ)
+    # 2) Иначе если в ТЗ найдены конкретные разделы/системы (и не требуется полный ПП 87) -> "tz" (Только разделы из ТЗ)
+    # 3) Иначе (если в ТЗ вообще не указаны разделы и нет экспертизы) -> "permit" (Для Разрешения на строительство)
+    total_explicit = len(explicit_pd) + len(explicit_rd)
+    if single_pd_hint or single_rd_hint:
+        auto_preset = "tz"
+    elif has_expertise_mention and not (explicit_list_hint and len(explicit_pd) <= 4):
+        auto_preset = "expertise"
+    elif not demands_full_pp87 and total_explicit > 0:
+        auto_preset = "tz"
+    elif has_expertise_mention:
+        auto_preset = "expertise"
+    else:
+        auto_preset = "permit"
+
+    # Корректировка для строго одиночных указаний («1 раздел ПД и 1 раздел РД»)
+    if single_pd_hint:
+        if not explicit_pd:
+            explicit_pd = {"kr" if facility_type != FacilityType.LINEAR else "tkr"}
+        elif len(explicit_pd) > 1:
+            non_pz = [x for x in explicit_pd if x != "pz"]
+            explicit_pd = {non_pz[0] if non_pz else next(iter(explicit_pd))}
+
+    if single_rd_hint:
+        if not explicit_rd:
+            first_pd = next(iter(explicit_pd)) if explicit_pd else "kr"
+            explicit_rd = {PD_TO_RD_DEFAULT.get(first_pd, "rd_kzh")}
+        elif len(explicit_rd) > 1:
+            # Если в строке РД явно была названа марка — берем первую найденную до авторасширения
+            explicit_rd = {next(iter(explicit_rd))}
+
+    return has_pd, has_rd, auto_preset, explicit_pd, explicit_rd
+
+
+def apply_tz_to_sections(
+    raw_text: str,
+    facility_type: FacilityType,
+    preset_override: Optional[str] = None,
+) -> Tuple[List[SectionItem], bool, bool, str, List[str], Dict[str, object]]:
+    """
+    Формирует состав разделов ПД и РД по одному из 3 режимов:
+    1. "tz" (Только по ТЗ): включает разделы ПД и марки РД, найденные по тексту ТЗ (с двусторонней связкой ПД <-> РД).
+    2. "permit" (Для Разрешения на строительство): включает СТРОГО разделы, необходимые для РнС, со всех остальных снимает галочки.
+    3. "expertise" (Для Экспертизы ПД): включает обязательный комплект для экспертизы + добавляет все разделы и марки РД из ТЗ.
+    """
+    detected_features: List[str] = []
+    text_lower = (raw_text or "").lower()
+
+    has_pd, has_rd, auto_preset, explicit_pd, explicit_rd = _detect_stages_and_explicit_sections(raw_text or "", facility_type)
+    chosen_preset = preset_override if preset_override in ("tz", "permit", "expertise") else auto_preset
+
+    if facility_type == FacilityType.LINEAR:
+        pd_sections = get_default_linear_sections()
+    else:
+        pd_sections = get_default_capital_sections()
+
+    valid_pd_ids = {s.id for s in pd_sections}
+
+    mapped_explicit_pd = set(explicit_pd)
+    if facility_type == FacilityType.LINEAR:
+        if mapped_explicit_pd & {"kr", "ios1", "ios2", "ios3", "ios4", "ios5_1", "ios5_2", "ios6", "tx"}:
+            mapped_explicit_pd.add("tkr")
+        if "pzu" in mapped_explicit_pd:
+            mapped_explicit_pd.add("ppo")
+        if "ar" in mapped_explicit_pd:
+            mapped_explicit_pd.add("lin_infra")
+    else:
+        if "ppo" in mapped_explicit_pd:
+            mapped_explicit_pd.add("pzu")
+        if "tkr" in mapped_explicit_pd:
+            mapped_explicit_pd.add("kr")
+        if "lin_infra" in mapped_explicit_pd:
+            mapped_explicit_pd.add("ar")
+
+    matched_pd_in_catalog = mapped_explicit_pd & valid_pd_ids
+
+    has_ots = bool(re.search(r"(?:обследование|гост\s*31937|техническ\w+\s+состояни\w+|\bотс\b)", text_lower))
+    has_gochs = bool(re.search(r"(?:гочс|го\s*и\s*чс|гражданск\w+\s+оборон\w+|чрезвычайн\w+\s+ситуац|гост\s*р\s*22\.2\.13)", text_lower))
+    has_pod = bool(re.search(r"(?:снос|демонтаж|ликвидаци\w+\s+сооружен)", text_lower))
+    has_automation = bool(re.search(r"(?:автоматизац|диспетчеризац|кип|асу)", text_lower))
+    has_tx = bool(re.search(r"(?:технологическ\w+\s+схем|технологическ\w+\s+решени|водоподготовк|очистк\w+\s+вод|водоочистк|уфо|фильтр|насосн\w+|технологическ\w+\s+регламент)", text_lower))
+    has_sm = bool(re.search(r"(?:смет|фснб|проверк\w+\s+достоверност|гранд[\-\s]смет|бюджетн\w+\s+финансирован|государственн\w+\s+экспертиз)", text_lower))
+    has_odi = bool(re.search(r"(?:доступ\w*\s+инвалид|маломобильн|\bоди\b|\bмоди\b|общественн\w+|административн\w+|школ|детск\w+|больниц|поликлиник|торгов\w+|жилой\s+дом)", text_lower))
+    has_ee = bool(re.search(r"(?:энергетическ\w+\s+эффективност|энергоэффективност|\bээ\b)", text_lower))
+    has_gas = bool(re.search(r"(?:систем\w+\s+газоснабжени|газопотреблени|газов\w+\s+котельн|\bиос\s*6\b)", text_lower))
+    has_rekult = bool(re.search(r"(?:рекультивац\w+\s+нарушенн\w+\s+земел|рекультивац\w+\s+земел)", text_lower))
+
+    trigger_map = {
+        "ots": has_ots,
+        "gochs": has_gochs,
+        "pod": has_pod,
+        "ios5_2": has_automation,
+        "ios6": has_gas,
+        "tx": has_tx,
+        "sm": has_sm,
+        "sm_p": has_sm,
+        "sm_vor": has_sm,
+        "odi": has_odi,
+        "ee": has_ee,
+        "rekult": has_rekult,
+    }
+
+    if chosen_preset == "tz":
+        # ВАРИАНТ 1: ТОЛЬКО ПО ТЗ (включаем разделы ПД и марки РД, найденные в ТЗ)
+        for s in pd_sections:
+            if has_pd and s.id in matched_pd_in_catalog:
+                s.enabled = True
+                s.source = "tz"
+            else:
+                s.enabled = False
+                s.source = "default"
+
+        rd_sections = build_rd_sections(facility_type, pd_sections, text_lower)
+        for r in rd_sections:
+            if has_rd and r.id in explicit_rd:
+                r.enabled = True
+                r.source = "tz"
+            else:
+                r.enabled = False
+                r.source = "default"
+
+        enabled_pd_marks = [s.code_mark for s in pd_sections if s.enabled]
+        enabled_rd_marks = [r.code_mark for r in rd_sections if r.enabled]
+        summary_parts = []
+        if enabled_pd_marks:
+            summary_parts.append(f"ПД ({len(enabled_pd_marks)}): {', '.join(enabled_pd_marks)}")
+        if enabled_rd_marks:
+            summary_parts.append(f"РД ({len(enabled_rd_marks)}): {', '.join(enabled_rd_marks)}")
+        if summary_parts:
+            detected_features.append(f"Предложен вариант «Только по ТЗ» — {' | '.join(summary_parts)}")
+
+    elif chosen_preset == "permit":
+        # ВАРИАНТ 2: СТРОГО ДЛЯ РАЗРЕШЕНИЯ НА СТРОИТЕЛЬСТВО (ч. 7 ст. 51 ГрК РФ) — остальные галочки сняты!
+        base_set = PERMIT_BASE_LINEAR if facility_type == FacilityType.LINEAR else PERMIT_BASE_CAPITAL
+        for s in pd_sections:
+            if s.id in base_set:
+                s.enabled = True
+                s.source = "tz" if s.id in matched_pd_in_catalog else "default"
+            else:
+                s.enabled = False
+                s.source = "default"
+
+        rd_sections = build_rd_sections(facility_type, pd_sections, text_lower)
+        for r in rd_sections:
+            r.enabled = False
+            r.source = "default"
+        has_rd = False
+
+        detected_features.append("Предложен вариант «Для Разрешения на строительство» (только обязательные разделы по ч. 7 ст. 51 ГрК РФ, остальные отключены)")
+
+    else:
+        # ВАРИАНТ 3: ДЛЯ ЭКСПЕРТИЗЫ ПД (ПП РФ № 87) + РАЗДЕЛЫ И МАРКИ, УКАЗАННЫЕ В ТЗ
+        chosen_preset = "expertise"
+        base_set = EXPERTISE_BASE_LINEAR if facility_type == FacilityType.LINEAR else EXPERTISE_BASE_CAPITAL
+
+        for s in pd_sections:
+            if s.id in matched_pd_in_catalog:
+                s.enabled = True
+                s.source = "tz"
+            elif s.id in base_set:
+                s.enabled = True
+                s.source = "default"
+            elif trigger_map.get(s.id, False):
+                s.enabled = True
+                s.source = "trigger"
+            else:
+                s.enabled = False
+                s.source = "default"
+
+        rd_sections = build_rd_sections(facility_type, pd_sections, text_lower)
+        if not has_rd:
+            for r in rd_sections:
+                r.enabled = False
+        elif explicit_rd:
+            for r in rd_sections:
+                r.enabled = r.id in explicit_rd
+                if r.enabled:
+                    r.source = "tz"
+
+        detected_features.append("Предложен вариант «Для Экспертизы ПД (ПП РФ № 87)» + дополнительные разделы из ТЗ")
+        if has_ots or "ots" in matched_pd_in_catalog:
+            detected_features.append("Включен раздел ОТС (техническое обследование)")
+        if has_gochs or "gochs" in matched_pd_in_catalog:
+            detected_features.append("Включен раздел ГОЧС (ГОСТ Р 22.2.13)")
+        if has_pod or "pod" in matched_pd_in_catalog:
+            detected_features.append("Включен раздел ПОД (снос / демонтаж)")
+        if has_automation or "ios5_2" in matched_pd_in_catalog:
+            detected_features.append("Включен подраздел ИОС5.2 (автоматизация и диспетчеризация)")
+        if has_tx or "tx" in matched_pd_in_catalog:
+            detected_features.append("Включен Раздел 6 ТХ (технологические решения)")
+        if has_sm or "sm" in matched_pd_in_catalog:
+            detected_features.append("Включен Раздел 12 СМ (сметная документация)")
+
+    if "цус" in text_lower or "цифровое управление строительством" in text_lower:
+        detected_features.append("Особое требование: электронный документооборот через ИАС «ЦУС» с УКЭП")
+
+    # Признаки для графика
+    has_surveys = bool(re.search(r"(?:инженерн\w+\s+изыскани|геодезическ\w+|геологическ\w+|экологическ\w+|\bигди\b|\bиги\b|\bиэи\b)", text_lower))
+    has_internal_exp = bool(re.search(r"внутренн\w+\s+экспертиз", text_lower))
+    has_state_exp = bool(re.search(r"(?:государственн\w+\s+экспертиз|негосударственн\w+\s+экспертиз|экспертиз\w+\s+проектн\w+\s+документац|достоверност\w+\s+(?:определения\s+)?сметн\w+\s+стоимост)", text_lower))
+    has_permit = bool(re.search(r"разрешени\w+\s+на\s+строительств", text_lower))
+    has_techplan = bool(re.search(r"техническ\w+\s+план", text_lower))
+    ots_enabled = any(s.id == "ots" and s.enabled for s in pd_sections)
+
+    schedule_flags = {
+        "ots": ots_enabled,
+        "surveys": has_surveys,
+        "survey_types": "ИГДИ, ИГИ, ИЭИ",
+        "internal_expertise": has_internal_exp,
+        "expertise": (chosen_preset == "expertise") or (chosen_preset == "tz" and has_state_exp),
+        "permit": has_permit or (chosen_preset == "permit"),
+        "techplan": has_techplan,
+    }
+
+    all_sections = pd_sections + rd_sections
+    return all_sections, has_pd, has_rd, chosen_preset, detected_features, schedule_flags
+
+
 def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
     """
     Анализирует текст ТЗ, извлекает параметры объекта,
-    определяет тип объекта и активирует нужные разделы.
+    определяет тип объекта, стадии и наиболее подходящий вариант состава разделов ПД/РД.
     """
-    detected_features = []
-
-    # 1. Извлечение наименования объекта
     object_name = "Строительство объекта"
     match_obj = re.search(
-        r"(?:по объекту|наименование объекта|объект строительства)[\s:]*([^\n\r]+)",
+        r"(?:по объекту|наименование объекта|объект проектирования|объект строительства)[\s:«\"'\-]+([^\n\r|]+)",
         raw_text,
         re.IGNORECASE,
     )
     if match_obj:
         val = match_obj.group(1).strip()
-        val = re.sub(r"^[«\"']|[»\"']$", "", val).strip()
-        if len(val) > 4:
+        val = re.sub(r"^[«\"']|[»\"'.]+$", "", val).strip()
+        if len(val) > 3:
             object_name = val
     else:
-        # Проверяем типовые строки вида "Строительство объекта..."
         match_constr = re.search(
-            r"((?:Строительство|Реконструкция|Капитальный ремонт)\s+[^\n\r\|]{5,80})",
+            r"((?:Строительство|Реконструкция|Капитальный ремонт|Техническое перевооружение|Проектирование)\s+[^\n\r\|]{4,90})",
             raw_text,
             re.IGNORECASE,
         )
         if match_constr:
             object_name = match_constr.group(1).strip()
 
-    # 2. Заказчик, Подрядчик, Субподрядчик
     customer = ""
     match_cust = re.search(
-        r"(?:Заказчик|Заказчик-Застройщик)[\s:\|]+([^\n\r]+)",
+        r"(?:Заказчик(?:[\-\s]Застройщик)?)\s*(?:\|[^\n\r|]*\|)?\s*[:\-–|]\s*([^\n\r|]+)",
         raw_text,
         re.IGNORECASE,
     )
@@ -85,24 +774,16 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
         customer = clean_extracted_entity(match_cust.group(1))
 
     contractor = ""
-    match_contr = re.search(
-        r"(?:Подрядчик|Генподрядчик)[\s:\|]+([^\n\r]+)",
+    match_gen = re.search(
+        r"(?:Генпроектировщик|Генеральный\s+проектировщик)\s*(?:\|[^\n\r|]*\|)?\s*[:\-–|]\s*([^\n\r|]+)",
         raw_text,
         re.IGNORECASE,
     )
-    if match_contr:
-        contractor = clean_extracted_entity(match_contr.group(1))
+    if match_gen:
+        cand = clean_extracted_entity(match_gen.group(1))
+        if not re.search(r"^(?:не\s+требуется|нет|не\s+указан|\-+)$", cand, re.IGNORECASE):
+            contractor = cand
 
-    subcontractor = ""
-    match_sub = re.search(
-        r"(?:Субподрядчик|Проектная организация)[\s:\|]+([^\n\r]+)",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if match_sub:
-        subcontractor = clean_extracted_entity(match_sub.group(1))
-
-    # 3. Договор и дата (если уже есть)
     contract_number = ""
     contract_date = ""
     match_contract = re.search(
@@ -115,117 +796,59 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
         if match_contract.group(2):
             contract_date = match_contract.group(2).strip()
 
-    # 4. Определение типа объекта (Капитальный vs Линейный vs Комплексный)
     text_lower = raw_text.lower()
-
     linear_keywords = [
-        "линейный объект", "полоса отвода", "протяженность трассы",
+        "линейный объект", "полоса отвода", "полосы отвода", "протяженность трассы",
         "трасса водопровода", "коллектор", "кабельная линия",
-        "наружные сети водоснабжения протяженностью", "вдоль трассы"
+        "наружные сети водоснабжения протяженностью", "вдоль трассы", "газопровод", "автомобильная дорога",
+        "раздел 5 «проект организации строительства»", "раздел 5 \"проект организации строительства\"",
     ]
     capital_keywords = [
-        "сооружение водоподготовки", "станция", "здание", "блок-бокс",
-        "площадка", "резервуар", "цех", "вос", "кос", "сооружение", "спозу"
+        "сооружение водоподготовки", "станция", "станции водоочистки", "здание", "блок-бокс",
+        "площадка", "резервуар", "цех", "вос", "кос", "сооружение", "спозу", "корпус", "жилой дом",
     ]
 
     has_linear_markers = any(k in text_lower for k in linear_keywords)
     has_capital_markers = any(k in text_lower for k in capital_keywords)
 
+    detected_features: List[str] = []
     if has_capital_markers and has_linear_markers:
-        facility_type = FacilityType.CAPITAL  # Площадка с прилегающими сетями (комплекс)
-        detected_features.append("Комплексный объект: площадочные сооружения + прилегающие линейные сети")
+        facility_type = FacilityType.CAPITAL
+        detected_features.append("Комплексный объект: площадочные сооружения + прилегающие сети")
     elif has_linear_markers and not has_capital_markers:
         facility_type = FacilityType.LINEAR
-        detected_features.append("Линейный объект (сети / трасса)")
+        detected_features.append("Линейный объект (Раздел III ПП РФ № 87)")
     else:
         facility_type = FacilityType.CAPITAL
-        detected_features.append("Объект капитального строительства (площадочный)")
+        detected_features.append("Объект капитального строительства (Раздел II ПП РФ № 87)")
 
-    # 5. Выбор разделов и триггеров
-    if facility_type == FacilityType.LINEAR:
-        sections = get_default_linear_sections()
-    else:
-        sections = get_default_capital_sections()
+    sections, has_pd, has_rd, chosen_preset, sec_features, schedule_flags = apply_tz_to_sections(raw_text, facility_type)
+    detected_features.extend(sec_features)
 
-    # Проверка специфических триггеров:
-    # 5.1 Обследование технического состояния (ОТС)
-    has_ots = bool(re.search(r"(?:обследование|гост 31937|техническ\w+ состояни\w+|отс)", text_lower))
-    if has_ots:
-        detected_features.append("Обнаружено требование обследования (ГОСТ 31937 / существующие сети/сооружения) -> включен том 13.2 ОТС")
-    for s in sections:
-        if s.id == "ots":
-            s.enabled = has_ots
-
-    # 5.2 Гражданская оборона и ЧС (ГОЧС)
-    has_gochs = bool(re.search(r"(?:гочс|го и чс|гражданск\w+ оборон\w+|чрезвычайн\w+ ситуац|гост р 22\.2\.13)", text_lower))
-    if has_gochs:
-        detected_features.append("Обнаружено требование ГОЧС (ГОСТ Р 22.2.13) -> включен раздел ГОЧС")
-    for s in sections:
-        if s.id == "gochs":
-            s.enabled = has_gochs
-
-    # 5.3 Снос / Демонтаж (ПОД)
-    has_pod = bool(re.search(r"(?:снос|демонтаж|ликвидаци\w+ сооружен)", text_lower))
-    if has_pod:
-        detected_features.append("Обнаружена необходимость сноса/демонтажа -> включен раздел ПОД")
-    for s in sections:
-        if s.id == "pod":
-            s.enabled = has_pod
-
-    # 5.4 Автоматизация комплексная (АК / АСУ)
-    has_automation = bool(re.search(r"(?:автоматизац|диспетчеризац|кип|асу)", text_lower))
-    if has_automation:
-        detected_features.append("Обнаружена автоматизация/диспетчеризация -> выделен подраздел ИОС5.2")
-    for s in sections:
-        if s.id == "ios5_2":
-            s.enabled = has_automation
-
-    # 5.5 Технология (ТХ)
-    has_tx = bool(re.search(r"(?:технологическ\w+ схем|водоподготовк|очистк\w+ вод|уфо|фильтр|насосн\w+|технологическ\w+ регламент)", text_lower))
-    if has_tx:
-        detected_features.append("Обнаружены технологические процессы/оборудование -> включен Раздел 6 (ТХ)")
-    for s in sections:
-        if s.id == "tx":
-            s.enabled = has_tx
-
-    # 5.6 Сметная документация
-    has_sm = bool(re.search(r"(?:смет|фснб|проверк\w+ достоверност|гранд-смет)", text_lower))
-    if has_sm:
-        detected_features.append("Обнаружены требования к сметам (ФСНБ-2022 / экспертиза смет) -> включен Раздел 12 (СМ, СМ.П, СМ.ВОР)")
-
-    # 5.7 ЦУС (Цифровое управление строительством)
-    if "цус" in text_lower or "цифровое управление строительством" in text_lower:
-        detected_features.append("Требование Заказчика: документооборот через ЦУС с усиленной ЭЦП")
-
-    # Формируем график
-    schedule = get_default_schedule(facility_type=facility_type, has_ots=has_ots)
-
-    # Режим по умолчанию: PRE_CONTRACT (Предварительная оценка / КП)
     project_mode = ProjectMode.PRE_CONTRACT
-    cipher = ""
-
-    # Если уже был найден явный договор, рассчитываем потенциальный шифр
-    if contract_number:
-        cipher = compute_cipher_from_contract(contract_number, contract_date)
+    cipher = compute_cipher_from_contract(contract_number, contract_date) if contract_number else ""
 
     project_data = ProjectData(
         mode=project_mode,
         object_name=object_name,
-        customer=customer or "",
-        contractor=contractor or "",
-        subcontractor=subcontractor or "",
+        customer=customer,
+        contractor=contractor,
         contract_number=contract_number,
         contract_date=contract_date,
         cipher=cipher,
         facility_type=facility_type,
-        start_date="2026-10-01",
-        total_months=len(schedule) + 1,
+        start_date=datetime.date.today().isoformat(),
+        has_pd=has_pd,
+        has_rd=has_rd,
+        composition_preset=chosen_preset,
+        schedule_flags=schedule_flags,
+        schedule_detail="sections",
+        tz_text=raw_text,
         sections=sections,
-        schedule_phases=schedule,
     )
 
-    # Применяем шифры (в режиме PRE_CONTRACT останутся чистые марки ГОСТ)
     apply_volume_ciphers(project_data)
+    project_data.schedule_phases = build_schedule(project_data)
 
     return project_data, detected_features
 
@@ -233,9 +856,7 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
 def clean_extracted_entity(raw: str) -> str:
     """Очищает название организации от лишних разделителей."""
     cleaned = raw.strip()
-    # Убираем хвосты после разделителей
     parts = re.split(r"[\n\r\|]", cleaned)
     first_part = parts[0].strip()
-    # Убираем лишние точки или двоеточия в начале/конце
-    first_part = re.sub(r"^[:\s\-]+|[:\s\-]+$", "", first_part)
+    first_part = re.sub(r"^[:\s\-–]+|[:\s\-–]+$", "", first_part)
     return first_part
