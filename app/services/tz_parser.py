@@ -849,6 +849,8 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
 
     apply_volume_ciphers(project_data)
     project_data.schedule_phases = build_schedule(project_data)
+    from app.services.cost_estimator import init_cost_parameters
+    project_data.cost_parameters = init_cost_parameters(project_data)
 
     return project_data, detected_features
 
