@@ -1,5 +1,6 @@
 import datetime
 import io
+import os
 import re
 from typing import Dict, List, Optional, Set, Tuple
 from app.models import FacilityType, ProjectData, ProjectMode, SectionItem
@@ -827,8 +828,12 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
 
     detected_features: List[str] = []
 
-    # 1. Сначала пробуем выполнить интеллектуальный анализ ТЗ через нейросеть (LLM)
-    llm_result = query_llm_tz_analysis(raw_text)
+    # Ограничение по тайм-ауту: локальный парсер мгновенный (0.05 сек)
+    # Если в окружении нет быстрого стабильного LLM, используем надёжный локальный интеллект
+    llm_result = None
+    use_ai = os.environ.get("USE_LLM_ANALYSIS", "").lower() in ("1", "true", "yes")
+    if use_ai:
+        llm_result = query_llm_tz_analysis(raw_text)
 
     if llm_result:
         detected_features.append("Использован интеллектуальный анализ ТЗ на базе нейросети (AI)")
