@@ -40,7 +40,6 @@ MONTHS_GEN = ["января", "февраля", "марта", "апреля", "�
 
 STAGE_TEXT = {
     KPStage.PD: "разработку проектной документации",
-    KPStage.RD: "разработку рабочей документации",
     KPStage.PD_RD: "разработку проектной и рабочей документации",
     KPStage.CHANGES: "внесение изменений в проектную документацию",
 }
@@ -110,9 +109,6 @@ def _rows_and_totals(req: KPRequest):
         for it in cp.sections_costs:
             if it.enabled:
                 rows.append((it.code_mark, it.title, it.cost_rub))
-        for aw in getattr(cp, "additional_works", []) or []:
-            if aw.enabled and aw.cost_net_rub > 0:
-                rows.append(("Доп.", aw.name, aw.cost_net_rub))
         net = round(sum(r[2] for r in rows), 2)
     elif req.price_format == KPPriceFormat.WORKS:
         for i, w in enumerate(req.works, 1):

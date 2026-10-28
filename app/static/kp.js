@@ -6,35 +6,14 @@
   if (!btnOpen || !modal) return;
 
   const $ = (id) => document.getElementById(id);
-  const lines = (id) =>
-    ($(id)?.value || "")
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-  function updateOutSuffix() {
-    const dtVal = $("kpDate")?.value;
-    const d = dtVal ? new Date(dtVal + "T00:00:00") : new Date();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yy = String(d.getFullYear()).slice(-2);
-    if ($("kpOutSuffix")) {
-      $("kpOutSuffix").textContent = `/${mm}${yy}`;
-    }
-  }
-
-  if ($("kpDate") && !$("kpDate").value) {
-    const now = new Date();
-    $("kpDate").value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  }
-  updateOutSuffix();
-  if ($("kpDate")) $("kpDate").addEventListener("change", updateOutSuffix);
+  const lines = (id) => $(id).value.split("\n").map((s) => s.trim()).filter(Boolean);
 
   fetch("/api/kp-info")
     .then((r) => r.json())
     .then((info) => {
       $("kpModeInfo").textContent = info.corporate_letterhead
-        ? "Режим: корпоративный бланк компании подключен (data/private/kp_letterhead.docx)."
-        : "Режим: нейтральный образец (без приватных данных компании). Реквизиты и подписант заполняются ниже.";
+        ? "Режим: корпоративный бланк компании подключен."
+        : "Режим: нейтральный образец (без данных компании). Реквизиты, подписант и исполнитель заполняются ниже.";
     })
     .catch(() => {});
 
@@ -47,78 +26,11 @@
   $("kpPayment").addEventListener("change", toggleBlocks);
   toggleBlocks();
 
-  function prefillModalFromProject() {
-    if (!currentProject) return;
-    const cp = currentProject.cost_parameters;
-
-    // Автоподстановка стадии (ПД и РД / только ПД / только РД)
-    if ($("kpStage")) {
-      if (currentProject.has_pd && currentProject.has_rd) {
-        $("kpStage").value = "pd_rd";
-      } else if (currentProject.has_rd && !currentProject.has_pd) {
-        $("kpStage").value = "rd";
-      } else {
-        $("kpStage").value = "pd";
-      }
-    }
-
-    // Автоподстановка адресата, если указан Заказчик
-    if ($("kpAddressee") && !$("kpAddressee").value.trim() && currentProject.customer) {
-      $("kpAddressee").value = `Руководителю\n${currentProject.customer}`;
-    }
-
-    // Автоподстановка срока из календарного графика
-    if ($("kpTermValue") && currentProject.schedule_phases && currentProject.schedule_phases.length) {
-      const maxWeek = currentProject.schedule_phases.reduce((m, p) => {
-        const endW = p.milestone ? p.start_week : p.start_week + Math.max(1, p.duration_weeks) - 1;
-        return Math.max(m, endW);
-      }, 8);
-      if ($("kpTermUnit")?.value === "calendar_days") {
-        $("kpTermValue").value = maxWeek * 7;
-      }
-    }
-
-    // Автозаполнение таблицы по укрупнённым видам работ из текущего расчёта стоимости
-    if ($("kpWorks") && cp) {
-      const workLines = [];
-      const pirStageTitle =
-        currentProject.has_pd && currentProject.has_rd
-          ? "Разработка проектной и рабочей документации (ПД и РД)"
-          : currentProject.has_rd
-          ? "Разработка рабочей документации (РД)"
-          : "Разработка проектной документации (ПД)";
-      const pirAmount = Math.round(cp.pir_only_cost_net_rub || cp.total_cost_net_rub || 0);
-      workLines.push(`${pirStageTitle} | ${pirAmount}`);
-      (cp.additional_works || []).forEach((aw) => {
-        if (aw.enabled && aw.cost_net_rub > 0) {
-          workLines.push(`${aw.name} | ${Math.round(aw.cost_net_rub)}`);
-        }
-      });
-      $("kpWorks").value = workLines.join("\n");
-    }
-
-    // Автозаполнение блока «В коммерческое предложение входит»
-    if ($("kpIncl") && !$("kpIncl").value.trim()) {
-      const incl = ["Сбор и анализ исходных данных для проектирования"];
-      if (currentProject.has_pd) incl.push("Разработка проектной документации в соответствии с ПП РФ № 87");
-      if (currentProject.has_rd) incl.push("Разработка рабочей документации в соответствии с ГОСТ Р 21.101-2020");
-      if (cp) {
-        (cp.additional_works || []).forEach((aw) => {
-          if (aw.enabled) incl.push(aw.name);
-        });
-      }
-      $("kpIncl").value = incl.join("\n");
-    }
-  }
-
   btnOpen.addEventListener("click", () => {
     if (!currentProject) {
       alert("Сначала загрузите ТЗ или сформируйте состав проекта.");
       return;
     }
-    syncProjectFromInputs();
-    if (typeof syncCostInputsToModel === "function") syncCostInputsToModel();
-    prefillModalFromProject();
     modal.classList.remove("hidden");
   });
   $("kpClose").addEventListener("click", () => modal.classList.add("hidden"));
@@ -134,7 +46,7 @@
 
   $("kpGenerate").addEventListener("click", async () => {
     syncProjectFromInputs();
-    if (typeof syncCostInputsToModel === "function") syncCostInputsToModel();
+    syncCostInputsToModel();
     const exclusions = Array.from(document.querySelectorAll(".kpExcl:checked")).map((c) => c.value);
     lines("kpExclExtra").forEach((x) => exclusions.push(x));
     const payload = {
