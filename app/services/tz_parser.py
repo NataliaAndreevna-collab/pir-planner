@@ -828,12 +828,8 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
 
     detected_features: List[str] = []
 
-    # Ограничение по тайм-ауту: локальный парсер мгновенный (0.05 сек)
-    # Если в окружении нет быстрого стабильного LLM, используем надёжный локальный интеллект
-    llm_result = None
-    use_ai = os.environ.get("USE_LLM_ANALYSIS", "").lower() in ("1", "true", "yes")
-    if use_ai:
-        llm_result = query_llm_tz_analysis(raw_text)
+    # Всегда используем нейросеть (LLM) для анализа ТЗ
+    llm_result = query_llm_tz_analysis(raw_text)
 
     if llm_result:
         detected_features.append("Использован интеллектуальный анализ ТЗ на базе нейросети (AI)")

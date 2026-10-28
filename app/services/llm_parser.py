@@ -11,9 +11,8 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Если одна модель временно перегружена (429/503), автоматически пробуется следующая.
 DEFAULT_MODELS = [
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "cohere/north-mini-code:free",
-    "nvidia/nemotron-3.5-lightning:free",
-    "google/gemma-4-26b-a4b-it:free",
+    "google/gemma-4-31b-it:free",
+    "liquid/lfm-2.5-2.6b:free",
 ]
 
 # Промпт для строгого извлечения структуры из ТЗ
@@ -183,7 +182,7 @@ def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Opt
                 data=json.dumps(req_data).encode("utf-8"),
             )
 
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with urllib.request.urlopen(req, timeout=35) as resp:
                 resp_bytes = resp.read()
                 resp_json = json.loads(resp_bytes.decode("utf-8"))
                 choices = resp_json.get("choices", [])
