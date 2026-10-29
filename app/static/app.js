@@ -700,13 +700,18 @@ btnUnselectAll.addEventListener("click", async () => {
 // ==========================================
 
 const SCHEDULE_GROUPS = {
-  survey: { label: "1. Обследование и изыскания", barClass: "bg-emerald-500 hover:bg-emerald-600" },
-  pd: { label: "2. Проектная документация (ПД)", barClass: "bg-blue-600 hover:bg-blue-700" },
-  approval: { label: "3. Согласования", barClass: "bg-amber-500 hover:bg-amber-600" },
-  expertise: { label: "4. Экспертиза", barClass: "bg-purple-600 hover:bg-purple-700" },
-  rd: { label: "5. Рабочая документация (РД)", barClass: "bg-cyan-600 hover:bg-cyan-700" },
-  other: { label: "6. Прочие работы", barClass: "bg-slate-600 hover:bg-slate-700" },
+  precontract: { label: "0. Организационно-договорной этап", barClass: "bg-slate-600 hover:bg-slate-700" },
+  survey: { label: "1. Сбор ИД и изыскания", barClass: "bg-emerald-500 hover:bg-emerald-600" },
+  tx_concept: { label: "2. Согласование технологии и Генплана", barClass: "bg-orange-500 hover:bg-orange-600" },
+  pd: { label: "3. Проектная документация (стадия ПД)", barClass: "bg-blue-600 hover:bg-blue-700" },
+  approval: { label: "4. Согласование с Заказчиком", barClass: "bg-amber-500 hover:bg-amber-600" },
+  expertise: { label: "5. Экспертиза (ИИ + ПД + Сметы)", barClass: "bg-purple-600 hover:bg-purple-700" },
+  rd: { label: "6. Рабочая документация (стадия РД)", barClass: "bg-teal-600 hover:bg-teal-700" },
+  other: { label: "7. Разрешение на строительство и ввод", barClass: "bg-slate-500 hover:bg-slate-600" },
 };
+
+const RESP_PARTIES = ["Проектировщик", "Заказчик", "Экспертиза", "Подрядчик", "Заказчик / Проектировщик"];
+const PHASE_STATUSES = ["В работе", "На согласовании", "Согласовано", "Замечания", "Завершено"];
 
 const MONTH_NAMES_SHORT = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
 
@@ -721,11 +726,12 @@ function resolveScheduleLocal() {
 
   for (let pass = 0; pass < phases.length; pass++) {
     phases.forEach((p) => {
+      if (p.enabled === false) return;
       if (p.depends_on && p.depends_on.length > 0) {
         let maxEnd = 0;
         p.depends_on.forEach((pid) => {
           const parent = byId[pid];
-          if (parent) {
+          if (parent && parent.enabled !== false) {
             const pDur = parent.milestone ? 0 : Math.max(1, parent.duration_weeks || 1);
             const pEnd = (parent.start_week || 1) + pDur;
             if (pEnd > maxEnd) maxEnd = pEnd;
@@ -760,6 +766,35 @@ async function rebuildScheduleBackend(detailOverride = null) {
     console.error("Ошибка перестроения графика:", err);
   }
 }
+
+// Чекбоксы фильтрации блоков графика (Этап 0, Изыскания, Концепция, Согласования, Экспертиза, РнС)
+function setupScheduleBlockFilters() {
+  const mapFilters = [
+    { id: "chkFilterPrecontract", groups: ["precontract"] },
+    { id: "chkFilterSurvey", groups: ["survey"] },
+    { id: "chkFilterConcept", groups: ["tx_concept"] },
+    { id: "chkFilterApproval", groups: ["approval"] },
+    { id: "chkFilterExpertise", groups: ["expertise"] },
+    { id: "chkFilterPermit", groups: ["other"] },
+  ];
+
+  mapFilters.forEach(({ id, groups }) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", (e) => {
+      if (!currentProject || !currentProject.schedule_phases) return;
+      const checked = e.target.checked;
+      currentProject.schedule_phases.forEach((p) => {
+        if (groups.includes(p.group)) {
+          p.enabled = checked;
+        }
+      });
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+}
+setupScheduleBlockFilters();
 
 if (btnSchedDetailSections) {
   btnSchedDetailSections.addEventListener("click", () => rebuildScheduleBackend("sections"));
@@ -833,6 +868,7 @@ function renderScheduleTable() {
 
   const phases = currentProject.schedule_phases;
   const maxWeekRaw = phases.reduce((max, p) => {
+    if (p.enabled === false) return max;
     const endW = p.milestone ? p.start_week : p.start_week + Math.max(1, p.duration_weeks) - 1;
     return Math.max(max, endW);
   }, 8);
@@ -859,12 +895,15 @@ function renderScheduleTable() {
   // 1. Двухуровневая шапка с понятными названиями колонок
   if (scheduleMonthHeaderRow) {
     let mHtml = `
-      <th rowspan="2" class="py-2 px-2 w-12 text-center border-b border-slate-700" title="Порядковый номер этапа в графике">№<br>этапа</th>
-      <th rowspan="2" class="py-2 px-3 min-w-[240px] border-b border-slate-700">Наименование этапа / раздела</th>
-      <th rowspan="2" class="py-2 px-2 w-32 text-center border-l border-b border-slate-700">Вид работ</th>
-      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Номер недели начала этапа от старта проекта">Начало,<br>нед.</th>
-      <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.,<br>нед.</th>
-      <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700">Действия</th>
+      <th rowspan="2" class="py-2 px-1 w-10 text-center border-b border-slate-700" title="Включить / исключить этап из графика">Вкл</th>
+      <th rowspan="2" class="py-2 px-2 w-10 text-center border-l border-b border-slate-700">№</th>
+      <th rowspan="2" class="py-2 px-3 min-w-[250px] border-l border-b border-slate-700">Наименование этапа / раздела</th>
+      <th rowspan="2" class="py-2 px-2 w-28 text-center border-l border-b border-slate-700">Вид работ</th>
+      <th rowspan="2" class="py-2 px-2 w-28 text-center border-l border-b border-slate-700">Ответственный</th>
+      <th rowspan="2" class="py-2 px-2 w-24 text-center border-l border-b border-slate-700">Статус</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Номер недели начала этапа от старта проекта">Начало</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700">Действия</th>
     `;
     for (let m = 0; m < numMonths; m++) {
       let label = `Месяц ${m + 1}`;
@@ -874,7 +913,7 @@ function renderScheduleTable() {
       }
       mHtml += `<th colspan="4" class="py-1.5 px-1 text-center text-[11px] font-bold bg-slate-800 border-l border-b border-slate-600">${label}</th>`;
     }
-    mHtml += `<th rowspan="2" class="py-2 px-3 min-w-[160px] border-l border-b border-slate-700">Примечание</th>`;
+    mHtml += `<th rowspan="2" class="py-2 px-3 min-w-[150px] border-l border-b border-slate-700">Примечание</th>`;
     scheduleMonthHeaderRow.innerHTML = mHtml;
   }
 
@@ -887,9 +926,10 @@ function renderScheduleTable() {
   // 2. Отрисовка строк графика с группировкой по видам работ
   scheduleTableBody.innerHTML = "";
   let lastGroup = null;
-  const totalCols = 7 + numWeeks;
+  const totalCols = 10 + numWeeks;
 
   phases.forEach((phase, idx) => {
+    const isPhaseEnabled = phase.enabled !== false;
     const grp = phase.group || "pd";
     if (grp !== lastGroup) {
       lastGroup = grp;
@@ -901,7 +941,7 @@ function renderScheduleTable() {
     }
 
     const tr = document.createElement("tr");
-    tr.className = `hover:bg-blue-50/30 transition border-b border-slate-100 ${phase.milestone ? "bg-amber-50/40" : ""}`;
+    tr.className = `hover:bg-blue-50/30 transition border-b border-slate-100 ${!isPhaseEnabled ? "opacity-40 bg-slate-50" : ""} ${phase.milestone ? "bg-amber-50/40" : ""}`;
 
     const pStart = phase.start_week;
     const pEnd = phase.milestone ? phase.start_week : phase.start_week + Math.max(1, phase.duration_weeks) - 1;
@@ -913,11 +953,23 @@ function renderScheduleTable() {
       groupOptionsHtml += `<option value="${gKey}" ${gKey === grp ? "selected" : ""}>${shortLbl}</option>`;
     });
 
+    let respOptionsHtml = "";
+    RESP_PARTIES.forEach((rp) => {
+      respOptionsHtml += `<option value="${rp}" ${(phase.resp_party || "Проектировщик") === rp ? "selected" : ""}>${rp}</option>`;
+    });
+
+    let statusOptionsHtml = "";
+    PHASE_STATUSES.forEach((st) => {
+      statusOptionsHtml += `<option value="${st}" ${(phase.status || "В работе") === st ? "selected" : ""}>${st}</option>`;
+    });
+
     let weekCellsHtml = "";
     for (let w = 1; w <= numWeeks; w++) {
       const isMonthStart = (w - 1) % 4 === 0;
       const borderCls = isMonthStart ? "border-l border-slate-300" : "border-l border-slate-100";
-      if (phase.milestone) {
+      if (!isPhaseEnabled) {
+        weekCellsHtml += `<td class="p-0.5 ${borderCls} bg-slate-50"></td>`;
+      } else if (phase.milestone) {
         if (w === pStart) {
           weekCellsHtml += `
             <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните для переноса вехи на Н${w}">
@@ -943,20 +995,30 @@ function renderScheduleTable() {
       }
     }
 
-    const depsVal = (phase.depends_on || []).join(", ");
-    const hasDeps = phase.depends_on && phase.depends_on.length > 0;
-
     tr.innerHTML = `
-      <td class="py-1.5 px-2 text-center font-mono text-xs font-bold text-slate-600">${phase.id}</td>
-      <td class="py-1.5 px-2">
+      <td class="py-1.5 px-1 text-center">
+        <input type="checkbox" class="sched-chk-enable rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" data-idx="${idx}" ${isPhaseEnabled ? "checked" : ""} title="Включить / исключить этап из графика">
+      </td>
+      <td class="py-1.5 px-1 text-center font-mono text-xs font-bold text-slate-600 border-l border-slate-100">${phase.id}</td>
+      <td class="py-1.5 px-2 border-l border-slate-100">
         <div class="flex items-center gap-1">
           <button class="sched-milestone-btn text-xs px-1 rounded ${phase.milestone ? "text-amber-600 font-bold" : "text-slate-300 hover:text-amber-500"}" data-idx="${idx}" title="Переключить: Этап / Контрольная веха ◆">◆</button>
           <input type="text" class="sched-inp-name w-full text-xs ${phase.milestone ? "font-bold text-amber-900" : "font-medium text-slate-800"} border border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-0.5 bg-transparent" data-idx="${idx}" value="${phase.name}">
         </div>
       </td>
-      <td class="py-1.5 px-1.5 border-l border-slate-100">
+      <td class="py-1.5 px-1 border-l border-slate-100">
         <select class="sched-inp-group w-full text-[11px] border border-slate-200 rounded px-1 py-0.5 bg-white" data-idx="${idx}">
           ${groupOptionsHtml}
+        </select>
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <select class="sched-inp-resp w-full text-[11px] border border-slate-200 rounded px-1 py-0.5 bg-white text-slate-700" data-idx="${idx}">
+          ${respOptionsHtml}
+        </select>
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <select class="sched-inp-status w-full text-[11px] border border-slate-200 rounded px-1 py-0.5 bg-white font-medium ${phase.status === 'Согласовано' ? 'text-emerald-700' : phase.status === 'Замечания' ? 'text-rose-700' : 'text-slate-700'}" data-idx="${idx}">
+          ${statusOptionsHtml}
         </select>
       </td>
       <td class="py-1.5 px-1 border-l border-slate-100">
@@ -977,6 +1039,30 @@ function renderScheduleTable() {
     `;
 
     scheduleTableBody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".sched-chk-enable").forEach((chk) => {
+    chk.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].enabled = e.target.checked;
+      resolveScheduleLocal();
+      renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-resp").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].resp_party = e.target.value;
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-status").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].status = e.target.value;
+      renderScheduleTable();
+    });
   });
 
   document.querySelectorAll(".sched-inp-name").forEach((inp) => {

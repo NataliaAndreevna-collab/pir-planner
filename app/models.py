@@ -74,13 +74,16 @@ class SectionItem(BaseModel):
 class SchedulePhase(BaseModel):
     id: int
     name: str
-    group: str = "pd"                # survey | pd | approval | expertise | rd | other
+    group: str = "pd"                # precontract | survey | tx_concept | pd | approval | expertise | rd | other
     start_week: int = 1              # Неделя начала (1..N) - для этапов без зависимостей задается вручную
     duration_weeks: int = 4          # Длительность в неделях (0 - веха)
     depends_on: List[int] = Field(default_factory=list)  # id этапов-предшественников (начало после их окончания)
     lag_weeks: int = 0               # Сдвиг относительно окончания предшественников (может быть < 0 - нахлест)
     milestone: bool = False          # Веха (контрольная точка)
     note: str = ""
+    status: str = "В работе"         # "В работе", "На согласовании", "Согласовано", "Замечания", "Завершено"
+    resp_party: str = "Проектировщик" # "Проектировщик", "Заказчик", "Экспертиза", "Подрядчик"
+    enabled: bool = True             # Флаг включения этапа в график (пользователь может отключить ненужные)
 
 
 class ProjectData(BaseModel):

@@ -13,12 +13,14 @@ MONTH_NAMES_RU = [
 ]
 
 GROUP_EXCEL_COLORS = {
-    "survey": "10B981",     # Изумрудный (Изыскания)
-    "pd": "3B82F6",         # Синий (ПД)
-    "approval": "F59E0B",   # Янтарный (Согласования)
-    "expertise": "8B5CF6",  # Фиолетовый (Экспертиза)
-    "rd": "06B6D4",         # Бирюзовый (РД)
-    "other": "64748B",      # Сланцевый (Прочее)
+    "precontract": "475569", # Тёмно-серый / сланец (Договор)
+    "survey": "10B981",      # Изумрудный (Изыскания)
+    "tx_concept": "F97316",  # Оранжевый (Технология)
+    "pd": "2563EB",          # Синий (ПД)
+    "approval": "D97706",    # Янтарный (Согласования)
+    "expertise": "9333EA",   # Пурпурный (Экспертиза)
+    "rd": "0D9488",          # Бирюзовый (РД)
+    "other": "64748B",       # Серо-голубой (Прочее / РнС)
 }
 
 
@@ -67,12 +69,14 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     # Колонки:
     # 1: №
     # 2: Наименование этапа / раздела
-    # 3: Старт (нед.)
-    # 4: Длит. (нед.)
-    # 5: Финиш (нед.)
-    # 6 .. 5 + num_weeks: Недели Н1..НN
-    # 6 + num_weeks: Примечание
-    first_week_col = 6
+    # 3: Ответственный
+    # 4: Статус
+    # 5: Старт (нед./дата)
+    # 6: Длит. (нед.)
+    # 7: Финиш (нед./дата)
+    # 8 .. 7 + num_weeks: Недели Н1..НN
+    # 8 + num_weeks: Примечание
+    first_week_col = 8
     note_col = first_week_col + num_weeks
 
     current_row = 1
@@ -123,9 +127,11 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     fixed_headers = [
         (1, "№\nэтапа"),
         (2, "Наименование этапа / раздела"),
-        (3, "Начало,\nнед."),
-        (4, "Длительность,\nнед."),
-        (5, "Окончание,\nнед."),
+        (3, "Ответственный"),
+        (4, "Статус"),
+        (5, "Начало"),
+        (6, "Длительность"),
+        (7, "Окончание"),
     ]
     for col_idx, text in fixed_headers:
         ws.merge_cells(start_row=tbl_start_row, start_column=col_idx, end_row=sub_row, end_column=col_idx)
@@ -179,7 +185,8 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
     # 3. Вывод строк графика с группировкой по блокам
     last_group = None
-    for idx, phase in enumerate(project_data.schedule_phases, start=1):
+    enabled_phases = [p for p in project_data.schedule_phases if getattr(p, "enabled", True)]
+    for idx, phase in enumerate(enabled_phases, start=1):
         grp = phase.group or "pd"
         if grp != last_group:
             last_group = grp
@@ -195,12 +202,22 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
         finish_week = phase.start_week if phase.milestone else (phase.start_week + max(1, phase.duration_weeks) - 1)
 
+        start_str = f"Н{phase.start_week}"
+        finish_str = f"Н{finish_week}"
+        if start_dt:
+            p_start_date = start_dt + datetime.timedelta(days=(phase.start_week - 1) * 7)
+            p_finish_date = start_dt + datetime.timedelta(days=finish_week * 7)
+            start_str = p_start_date.strftime("%d.%m.%Y")
+            finish_str = p_finish_date.strftime("%d.%m.%Y")
+
         row_vals = [
             (1, phase.id or idx, align_center, font_bold if phase.milestone else font_regular),
             (2, f"◆ {phase.name}" if phase.milestone else phase.name, align_left, font_bold if phase.milestone else font_regular),
-            (3, f"Н{phase.start_week}", align_center, font_regular),
-            (4, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
-            (5, f"Н{finish_week}", align_center, font_regular),
+            (3, getattr(phase, "resp_party", "Проектировщик"), align_center, font_regular),
+            (4, getattr(phase, "status", "В работе"), align_center, font_regular),
+            (5, start_str, align_center, font_regular),
+            (6, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
+            (7, finish_str, align_center, font_regular),
         ]
         for col_idx, val, al, fnt in row_vals:
             cell = ws.cell(row=current_row, column=col_idx, value=val)
@@ -243,9 +260,11 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     # Настройка ширины колонок
     ws.column_dimensions["A"].width = 7.0
     ws.column_dimensions["B"].width = 48
-    ws.column_dimensions["C"].width = 13
-    ws.column_dimensions["D"].width = 10
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 16
     ws.column_dimensions["E"].width = 13
+    ws.column_dimensions["F"].width = 13
+    ws.column_dimensions["G"].width = 13
     ws.column_dimensions["F"].width = 11
     for w in range(1, num_weeks + 1):
         col_letter = get_column_letter(first_week_col + w - 1)
