@@ -275,7 +275,7 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
         current_row += 1
 
-    # Настройка ширины колонок
+    # Настройка ширины колонок Листа 1
     ws.column_dimensions["A"].width = 7.0
     ws.column_dimensions["B"].width = 46
     ws.column_dimensions["C"].width = 16
@@ -289,7 +289,6 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     ws.column_dimensions["K"].width = 12
     ws.column_dimensions["L"].width = 12
     ws.column_dimensions["M"].width = 20
-    ws.column_dimensions["F"].width = 11
     for w in range(1, num_weeks + 1):
         col_letter = get_column_letter(first_week_col + w - 1)
         ws.column_dimensions[col_letter].width = 4.2
@@ -297,6 +296,88 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
     ws.row_dimensions[tbl_start_row].height = 22
     ws.row_dimensions[sub_row].height = 20
+
+    # =========================================================================
+    # ЛИСТ 2: РЕЕСТР СОГЛАСОВАНИЙ И ЗАМЕЧАНИЙ (РАБОЧИЙ ЖУРНАЛ ГИПА)
+    # По образцу листа "Геолог"
+    # =========================================================================
+    ws2 = wb.create_sheet(title="Реестр замечаний и ответов")
+    ws2.views.sheetView[0].showGridLines = True
+
+    # Заголовок Листа 2
+    ws2.merge_cells("A1:K1")
+    title2 = ws2.cell(row=1, column=1, value="РЕЕСТР СОГЛАСОВАНИЙ, ЗАМЕЧАНИЙ И ОТВЕТОВ (ЖУРНАЛ ГИПА)")
+    title2.font = font_title
+    title2.alignment = align_center
+
+    ws2.merge_cells("A2:K2")
+    sub_title2 = ws2.cell(row=2, column=1, value=f"Объект: {project_data.object_name}   |   Заказчик: {project_data.customer or 'Не указан'}")
+    sub_title2.font = Font(name="Calibri", size=10, bold=True, color="1E3A8A")
+    sub_title2.alignment = align_left
+
+    reg_headers = [
+        (1, "№\nп/п", 6),
+        (2, "Вид работы / Раздел документации", 40),
+        (3, "Статус\nсогласования", 16),
+        (4, "Плановый\nсрок", 12),
+        (5, "Дата направления\nЗаказчику / в эксп.", 18),
+        (6, "Исходящий №\nпроектировщика", 18),
+        (7, "Замечания Заказчика / Экспертизы\n(вх. №, дата, суть замечаний)", 35),
+        (8, "Ответы проектировщика\n(исх. №, дата, статус устранения)", 35),
+        (9, "Повторные замечания\n(вх. №, дата)", 25),
+        (10, "Финальный ответ / Снятие\n(исх. №, протокол)", 25),
+        (11, "Итоговый результат\n/ Заключение", 25),
+    ]
+
+    r2_hdr = 4
+    for col_idx, h_text, w_width in reg_headers:
+        c2 = ws2.cell(row=r2_hdr, column=col_idx, value=h_text)
+        c2.fill = steel_fill
+        c2.font = font_white_bold
+        c2.alignment = align_center
+        c2.border = thin_border
+        col_letter = get_column_letter(col_idx)
+        ws2.column_dimensions[col_letter].width = w_width
+
+    ws2.row_dimensions[r2_hdr].height = 28
+
+    r2_cur = 5
+    # Заполняем строками из ключевых этапов (согласования, экспертиза, тома ПД/РД)
+    target_phases = [p for p in enabled_phases if p.group in ("approval", "expertise", "tx_concept", "precontract") or not p.milestone]
+    for p_idx, phase in enumerate(target_phases, start=1):
+        status_val = getattr(phase, "status", "В работе")
+        c_status_fill = None
+        if "Согласовано" in status_val or "Завершено" in status_val:
+            c_status_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid") # Зеленоватый
+        elif "Замечания" in status_val or "На согласовании" in status_val:
+            c_status_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid") # Желтоватый
+
+        row2_data = [
+            (1, p_idx, align_center, font_bold if phase.milestone else font_regular),
+            (2, phase.name, align_left, font_bold if phase.milestone else font_regular),
+            (3, status_val, align_center, font_bold if "Согласовано" in status_val else font_regular),
+            (4, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
+            (5, getattr(phase, "sent_to_client_date", "") or "", align_center, font_regular),
+            (6, "", align_center, font_regular), # Место для ввода исх. номера
+            (7, getattr(phase, "client_remarks_1_date", "") or "", align_left, font_regular),
+            (8, getattr(phase, "designer_answers_1_date", "") or "", align_left, font_regular),
+            (9, getattr(phase, "client_remarks_2_date", "") or "", align_left, font_regular),
+            (10, getattr(phase, "designer_answers_2_date", "") or "", align_left, font_regular),
+            (11, getattr(phase, "approval_result", "") or ("Согласовано" if phase.status == "Согласовано" else "В процессе"), align_left, font_regular),
+        ]
+
+        for col_idx, val, al, fnt in row2_data:
+            cell = ws2.cell(row=r2_cur, column=col_idx, value=val)
+            cell.alignment = al
+            cell.font = fnt
+            cell.border = thin_border
+            if col_idx == 3 and c_status_fill:
+                cell.fill = c_status_fill
+            elif phase.milestone:
+                cell.fill = milestone_fill
+
+        ws2.row_dimensions[r2_cur].height = 20
+        r2_cur += 1
 
     stream = io.BytesIO()
     wb.save(stream)

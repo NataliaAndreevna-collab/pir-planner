@@ -767,25 +767,27 @@ async function rebuildScheduleBackend(detailOverride = null) {
   }
 }
 
-// Чекбоксы фильтрации блоков графика (Этап 0, Изыскания, Концепция, Согласования, Экспертиза, РнС)
+// Чекбоксы фильтрации блоков графика (Этап 0, Изыскания, Концепция, Согласования, Внутренняя экспертиза РВК, Госэкспертиза)
 function setupScheduleBlockFilters() {
   const mapFilters = [
     { id: "chkFilterPrecontract", groups: ["precontract"] },
     { id: "chkFilterSurvey", groups: ["survey"] },
     { id: "chkFilterConcept", groups: ["tx_concept"] },
     { id: "chkFilterApproval", groups: ["approval"] },
-    { id: "chkFilterExpertise", groups: ["expertise"] },
-    { id: "chkFilterPermit", groups: ["other"] },
+    { id: "chkFilterInternalExp", customFilter: (p) => p.group === "expertise" && (p.name.includes("РВК") || p.name.includes("внутренн")) },
+    { id: "chkFilterExpertise", customFilter: (p) => p.group === "expertise" && !(p.name.includes("РВК") || p.name.includes("внутренн")) },
   ];
 
-  mapFilters.forEach(({ id, groups }) => {
+  mapFilters.forEach(({ id, groups, customFilter }) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener("change", (e) => {
       if (!currentProject || !currentProject.schedule_phases) return;
       const checked = e.target.checked;
       currentProject.schedule_phases.forEach((p) => {
-        if (groups.includes(p.group)) {
+        if (customFilter) {
+          if (customFilter(p)) p.enabled = checked;
+        } else if (groups && groups.includes(p.group)) {
           p.enabled = checked;
         }
       });
@@ -900,7 +902,6 @@ function renderScheduleTable() {
   }
 
   // 1. Двухуровневая шапка с понятными названиями колонок
-  const chkToggleApprovalDates = document.getElementById("chkToggleApprovalDates");
   const showApprovalCols = chkToggleApprovalDates ? chkToggleApprovalDates.checked : true;
 
   if (scheduleMonthHeaderRow) {

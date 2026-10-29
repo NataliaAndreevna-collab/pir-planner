@@ -774,9 +774,9 @@ def apply_tz_to_sections(
         "ots": ots_enabled,
         "surveys": has_surveys,
         "survey_types": "ИГДИ, ИГИ, ИЭИ",
-        "internal_expertise": has_internal_exp,
-        "expertise": (chosen_preset == "expertise") or (chosen_preset == "tz" and has_state_exp),
-        "permit": has_permit or (chosen_preset == "permit"),
+        "internal_expertise": True,  # Включаем этапы внутренней экспертизы РВК в график по умолчанию
+        "expertise": True,           # Включаем этапы Главгосэкспертизы и смет в график по умолчанию
+        "permit": False,             # Разрешение на строительство убрано по требованию ГИПа
         "techplan": has_techplan,
     }
 
@@ -929,9 +929,9 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
             "ots": any(s.id == "ots" and s.enabled for s in pd_sections),
             "surveys": bool(llm_result.get("has_surveys", False)),
             "survey_types": "ИГДИ, ИГИ, ИЭИ",
-            "internal_expertise": False,
-            "expertise": bool(llm_result.get("has_expertise", False)) or (chosen_preset == "expertise"),
-            "permit": chosen_preset == "permit",
+            "internal_expertise": True,
+            "expertise": True,
+            "permit": False,
             "techplan": False,
         }
         sections = pd_sections + rd_sections
