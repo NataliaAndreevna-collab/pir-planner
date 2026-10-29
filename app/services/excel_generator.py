@@ -67,13 +67,12 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     # Колонки:
     # 1: №
     # 2: Наименование этапа / раздела
-    # 3: После №
-    # 4: Старт (нед.)
-    # 5: Длит. (нед.)
-    # 6: Финиш (нед.)
-    # 7 .. 6 + num_weeks: Недели Н1..НN
-    # 7 + num_weeks: Примечание
-    first_week_col = 7
+    # 3: Старт (нед.)
+    # 4: Длит. (нед.)
+    # 5: Финиш (нед.)
+    # 6 .. 5 + num_weeks: Недели Н1..НN
+    # 6 + num_weeks: Примечание
+    first_week_col = 6
     note_col = first_week_col + num_weeks
 
     current_row = 1
@@ -124,10 +123,9 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     fixed_headers = [
         (1, "№\nэтапа"),
         (2, "Наименование этапа / раздела"),
-        (3, "Старт после\nэтапа №"),
-        (4, "Начало,\nнед."),
-        (5, "Длительность,\nнед."),
-        (6, "Окончание,\nнед."),
+        (3, "Начало,\nнед."),
+        (4, "Длительность,\nнед."),
+        (5, "Окончание,\nнед."),
     ]
     for col_idx, text in fixed_headers:
         ws.merge_cells(start_row=tbl_start_row, start_column=col_idx, end_row=sub_row, end_column=col_idx)
@@ -196,18 +194,13 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
             current_row += 1
 
         finish_week = phase.start_week if phase.milestone else (phase.start_week + max(1, phase.duration_weeks) - 1)
-        deps_str = ", ".join(str(d) for d in phase.depends_on) if phase.depends_on else "—"
-        if phase.depends_on and phase.lag_weeks:
-            sign = "+" if phase.lag_weeks > 0 else ""
-            deps_str += f" ({sign}{phase.lag_weeks}н)"
 
         row_vals = [
             (1, phase.id or idx, align_center, font_bold if phase.milestone else font_regular),
             (2, f"◆ {phase.name}" if phase.milestone else phase.name, align_left, font_bold if phase.milestone else font_regular),
-            (3, deps_str, align_center, font_regular),
-            (4, f"Н{phase.start_week}", align_center, font_regular),
-            (5, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
-            (6, f"Н{finish_week}", align_center, font_regular),
+            (3, f"Н{phase.start_week}", align_center, font_regular),
+            (4, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
+            (5, f"Н{finish_week}", align_center, font_regular),
         ]
         for col_idx, val, al, fnt in row_vals:
             cell = ws.cell(row=current_row, column=col_idx, value=val)

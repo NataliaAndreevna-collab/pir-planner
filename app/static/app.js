@@ -862,8 +862,6 @@ function renderScheduleTable() {
       <th rowspan="2" class="py-2 px-2 w-12 text-center border-b border-slate-700" title="Порядковый номер этапа в графике">№<br>этапа</th>
       <th rowspan="2" class="py-2 px-3 min-w-[240px] border-b border-slate-700">Наименование этапа / раздела</th>
       <th rowspan="2" class="py-2 px-2 w-32 text-center border-l border-b border-slate-700">Вид работ</th>
-      <th rowspan="2" class="py-2 px-2 w-24 text-center border-l border-b border-slate-700" title="Укажите номер этапа, после окончания которого начинается этот этап (можно несколько через запятую)">Старт после<br>этапа №</th>
-      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Смещение относительно предыдущего этапа в неделях (+ задержка, - параллельный нахлест)">Сдвиг,<br>нед.</th>
       <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Номер недели начала этапа от старта проекта">Начало,<br>нед.</th>
       <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.,<br>нед.</th>
       <th rowspan="2" class="py-2 px-1.5 w-20 text-center border-l border-b border-slate-700">Действия</th>
@@ -889,7 +887,7 @@ function renderScheduleTable() {
   // 2. Отрисовка строк графика с группировкой по видам работ
   scheduleTableBody.innerHTML = "";
   let lastGroup = null;
-  const totalCols = 9 + numWeeks;
+  const totalCols = 7 + numWeeks;
 
   phases.forEach((phase, idx) => {
     const grp = phase.group || "pd";
@@ -961,14 +959,8 @@ function renderScheduleTable() {
           ${groupOptionsHtml}
         </select>
       </td>
-      <td class="py-1.5 px-1.5 border-l border-slate-100">
-        <input type="text" class="sched-inp-deps w-full text-center font-mono text-xs border border-slate-200 rounded px-1 py-0.5 bg-white" placeholder="нет" data-idx="${idx}" value="${depsVal}" title="Укажите номер этапа, после которого стартует этот этап (например: 1 или 1, 2)">
-      </td>
       <td class="py-1.5 px-1 border-l border-slate-100">
-        <input type="number" step="1" min="-20" max="52" class="sched-inp-lag w-full text-center font-mono text-xs border border-slate-200 rounded px-1 py-0.5 ${hasDeps ? "bg-white" : "bg-slate-100 text-slate-400"}" data-idx="${idx}" value="${phase.lag_weeks || 0}" ${hasDeps ? "" : "disabled"} title="Смещение в неделях относительно окончания предыдущего этапа (+ задержка, - нахлест)">
-      </td>
-      <td class="py-1.5 px-1 border-l border-slate-100">
-        <input type="number" step="1" min="1" max="200" class="sched-inp-start w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${hasDeps ? "bg-slate-100 text-slate-500" : "bg-white text-blue-700"}" data-idx="${idx}" value="${phase.start_week}" title="Неделя начала работ от старта проекта">
+        <input type="number" step="1" min="1" max="200" class="sched-inp-start w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white text-blue-700" data-idx="${idx}" value="${phase.start_week}" title="Неделя начала работ от старта проекта">
       </td>
       <td class="py-1.5 px-1 border-l border-slate-100">
         <input type="number" step="1" min="0" max="100" class="sched-inp-dur w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${phase.milestone ? "bg-slate-100 text-slate-400" : "bg-white"}" data-idx="${idx}" value="${phase.milestone ? 0 : phase.duration_weeks}" ${phase.milestone ? "disabled" : ""} title="Длительность этапа в неделях">
