@@ -467,14 +467,29 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         r"(?:рабоч\w+\s+документац|проектн\w+/рабоч\w+|проектн\w+\s+и\s+рабоч\w+|(?<![а-яёa-z0-9])рд(?![а-яёa-z0-9])|рабочи[ех]\s+чертеж|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|марк[аиуе]\s+[а-яё]{2,5}(?![а-яё]))",
         text_lower
     ))
-    mentions_only_pd = bool(re.search(
-        r"(?:только\s+проектн\w+\s+документац|без\s+рабоч\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*пд|рабоч\w+\s+документац\w*\s+не\s+(?:разрабатыва|требу)|(?:стадия|стадийность)\s*(?:проектирования)?\s*[\t\|:\-– ]+\s*проектная\s+документация|(?:стадия|стадийность)\s*(?:проектирования)?\s*[\t\|:\-– ]+\s*[«\"']?п[»\"']?(?:\s|$|\.))",
+    # Точное определение стадии проектирования из заголовков таблицы ТЗ
+    stage_row_match = re.search(
+        r"(?:^|\n)[\|\s0-9\.\-]*\b(?:стади[ияюйн\w]*|вид\s+работ)\s*(?:проектирования)?\b[\t\|:\-– ]*([^\n\r\|]{2,120})",
         text_lower
+    )
+    stage_header_text = stage_row_match.group(1).strip() if stage_row_match else ""
+
+    explicit_both_stages = bool(re.search(
+        r"(?:пд\s*[\+,и\/]\s*рд|п\s*[\+,и\/]\s*р|проектн\w+\s*(?:и|\/)\s*рабоч\w+|две\s+стадии|в\s+2\s+стадии)",
+        stage_header_text or text_lower
     ))
-    mentions_only_rd = bool(re.search(
-        r"(?:только\s+рабоч\w+\s+документац|без\s+проектн\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*(?:рд|рабоч)|(?:стадия|стадийность)\s*(?:проектирования)?\s*[\t\|:\-– ]+\s*рабочая\s+документация|(?:стадия|стадийность)\s*(?:проектирования)?\s*[\t\|:\-– ]+\s*[«\"']?р[»\"']?(?:\s|$|\.)|на\s+основании\s+(?:ранее\s+разработанной\s+)?проектной\s+документации)",
-        text_lower
+
+    explicit_only_rd = (not explicit_both_stages) and bool(re.search(
+        r"(?:рабочая\s+документация|\bрд\b|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|только\s+рабоч|без\s+проектн\w+\s+документац|на\s+основании\s+(?:ранее\s+разработанной\s+)?проектной)",
+        stage_header_text if stage_header_text else text_lower
     ))
+
+    explicit_only_pd = (not explicit_both_stages) and bool(re.search(
+        r"(?:проектная\s+документация|\bпд\b|стади[ияю]\s*[«\"']?п[»\"']?(?:\b|$)|только\s+проектн|без\s+рабоч\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*пд|рабоч\w+\s+документац\w*\s+не\s+(?:разрабатыва|требу))",
+        stage_header_text if stage_header_text else text_lower
+    ))
+
+    mentions_sm = bool(re.search(r"(?:сметн\w+\s+документац|\bсм\b|\bсср\b|локальн\w+\s+смет|сметы\b)", stage_header_text or text_lower))
 
     explicit_pd: Set[str] = set()
     explicit_rd: Set[str] = set()
@@ -504,14 +519,21 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         text_lower
     ))
 
-    if mentions_only_rd:
+    if explicit_only_rd:
         has_pd = False
         has_rd = True
         explicit_pd = set()
-    elif mentions_only_pd:
+    elif explicit_only_pd:
         has_pd = True
         has_rd = False
         explicit_rd = set()
+    elif explicit_both_stages:
+        has_pd = True
+        has_rd = True
+        if explicit_rd and not (single_pd_hint and explicit_pd):
+            explicit_pd |= map_rd_to_pd_ids(explicit_rd, facility_type)
+        if explicit_pd and not (single_rd_hint and explicit_rd):
+            explicit_rd |= map_pd_to_rd_ids(explicit_pd, text_lower)
     else:
         # ПРАВИЛО ДВУСТОРОННЕЙ СВЯЗКИ ПД <-> РД:
         # 1) Если найдены марки/дисциплины РД -> автоматически добавляем аналогичные разделы в ПД
@@ -525,6 +547,13 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         has_pd = True
         # Включаем РД, если она упомянута явно ИЛИ если в ТЗ перечислены инженерные разделы/марки
         has_rd = bool(mentions_rd or explicit_rd)
+
+    # Если сметы (СМ) выделены отдельно в графе стадийности/состава:
+    if mentions_sm:
+        if has_pd:
+            explicit_pd.add("sm")
+        if has_rd:
+            explicit_rd.add("rd_sm")
 
     demands_full_pp87 = bool(re.search(
         r"(?:состав\s+разделов\s+принять\s+согласно\s+постановлени\w*[^\n]{0,50}№\s*87|в\s+полном\s+объеме[^\n]{0,40}№\s*87)",
