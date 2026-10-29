@@ -70,10 +70,14 @@
         </div>
       </div>
 
-      <div class="mt-4 flex items-center justify-end">
-        <button id="btnParse" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-lg shadow-sm transition flex items-center text-sm">
-          <i class="fa-solid fa-bolt mr-2"></i>
-          Запустить экспресс-анализ ТЗ
+      <div class="mt-4 flex flex-wrap items-center justify-end gap-3">
+        <button id="btnParseLocal" class="bg-slate-700 hover:bg-slate-800 text-white font-medium px-4 py-2.5 rounded-lg shadow-sm transition flex items-center text-sm">
+          <i class="fa-solid fa-bolt mr-2 text-amber-400"></i>
+          Быстрый анализ (без AI)
+        </button>
+        <button id="btnParseAI" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-lg shadow-sm transition flex items-center text-sm">
+          <i class="fa-solid fa-brain mr-2 text-indigo-200"></i>
+          Анализ через нейросеть (AI)
         </button>
       </div>
     </div>

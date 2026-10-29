@@ -783,10 +783,13 @@ def apply_tz_to_sections(
     return all_sections, has_pd, has_rd, chosen_preset, detected_features, schedule_flags
 
 
-def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
+def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData, List[str]]:
     """
     Анализирует текст ТЗ, извлекает параметры объекта,
     определяет тип объекта, стадии и наиболее подходящий вариант состава разделов ПД/РД.
+    Параметр engine:
+      - 'local': мгновенный нормативный расчет по ключевым маркерам и словарям (<0.05 сек).
+      - 'ai': анализ через нейросеть (OpenRouter LLM) с подробными пояснениями.
     """
     object_name = "Строительство объекта"
     match_obj = re.search(
@@ -857,13 +860,19 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
 
     detected_features: List[str] = []
 
-    # Всегда используем нейросеть (LLM) для анализа ТЗ
-    llm_result = query_llm_tz_analysis(raw_text)
+    llm_result = None
+    if engine == "ai":
+        detected_features.append("Запущен анализ ТЗ через нейросеть (AI)")
+        llm_result = query_llm_tz_analysis(raw_text)
+        if not llm_result:
+            detected_features.append("Внимание: Нейросеть (AI) не ответила вовремя или недоступна. Выполнен расчет по нормативным правилам.")
+    else:
+        detected_features.append("Использован быстрый нормативный алгоритм (без AI)")
 
     if llm_result:
-        detected_features.append("Использован интеллектуальный анализ ТЗ на базе нейросети (AI)")
+        detected_features.append("Успешно применены выводы нейросети (AI)")
         if llm_result.get("explanation"):
-            detected_features.append(f"AI: {llm_result['explanation']}")
+            detected_features.append(f"AI пояснение: {llm_result['explanation']}")
 
         if llm_result.get("object_name") and len(llm_result["object_name"].strip()) > 3:
             object_name = llm_result["object_name"].strip()

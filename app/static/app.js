@@ -8,7 +8,8 @@ const dropZone = document.getElementById("dropZone");
 const fileInput = document.getElementById("fileInput");
 const selectedFileName = document.getElementById("selectedFileName");
 const tzText = document.getElementById("tzText");
-const btnParse = document.getElementById("btnParse");
+const btnParseLocal = document.getElementById("btnParseLocal");
+const btnParseAI = document.getElementById("btnParseAI");
 
 const insightsCard = document.getElementById("insightsCard");
 const detectedFeaturesList = document.getElementById("detectedFeaturesList");
@@ -151,10 +152,11 @@ function showSelectedFile(name) {
   selectedFileName.classList.remove("hidden");
 }
 
-// Кнопка парсинга ТЗ
-btnParse.addEventListener("click", async () => {
+// Функция запуска анализа ТЗ с выбором движка ('local' или 'ai')
+async function runParseTZ(engine) {
   const formData = new FormData();
   formData.append("text", tzText.value);
+  formData.append("engine", engine);
   if (fileInput.files.length > 0) {
     formData.append("file", fileInput.files[0]);
   }
@@ -164,8 +166,14 @@ btnParse.addEventListener("click", async () => {
     return;
   }
 
-  btnParse.disabled = true;
-  btnParse.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Анализ ТЗ...';
+  btnParseLocal.disabled = true;
+  btnParseAI.disabled = true;
+
+  if (engine === "ai") {
+    btnParseAI.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Запрос к нейросети (10-25 сек)...';
+  } else {
+    btnParseLocal.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Быстрый анализ...';
+  }
 
   try {
     const res = await fetch("/api/parse-tz", {
@@ -192,10 +200,19 @@ btnParse.addEventListener("click", async () => {
   } catch (err) {
     alert("Ошибка: " + err.message);
   } finally {
-    btnParse.disabled = false;
-    btnParse.innerHTML = '<i class="fa-solid fa-bolt mr-2"></i> Запустить экспресс-анализ ТЗ';
+    btnParseLocal.disabled = false;
+    btnParseAI.disabled = false;
+    btnParseLocal.innerHTML = '<i class="fa-solid fa-bolt mr-2 text-amber-400"></i> Быстрый анализ (без AI)';
+    btnParseAI.innerHTML = '<i class="fa-solid fa-brain mr-2 text-indigo-200"></i> Анализ через нейросеть (AI)';
   }
-});
+}
+
+if (btnParseLocal) {
+  btnParseLocal.addEventListener("click", () => runParseTZ("local"));
+}
+if (btnParseAI) {
+  btnParseAI.addEventListener("click", () => runParseTZ("ai"));
+}
 
 function renderInsights(features) {
   detectedFeaturesList.innerHTML = "";
