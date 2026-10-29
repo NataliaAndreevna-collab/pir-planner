@@ -74,9 +74,15 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     # 5: Старт (нед./дата)
     # 6: Длит. (нед.)
     # 7: Финиш (нед./дата)
-    # 8 .. 7 + num_weeks: Недели Н1..НN
-    # 8 + num_weeks: Примечание
-    first_week_col = 8
+    # 8: Передано Заказчику
+    # 9: Замечания 1
+    # 10: Ответы 1
+    # 11: Замечания 2
+    # 12: Ответы 2
+    # 13: Результат согласования
+    # 14 .. 13 + num_weeks: Недели Н1..НN
+    # 14 + num_weeks: Примечание
+    first_week_col = 14
     note_col = first_week_col + num_weeks
 
     current_row = 1
@@ -132,6 +138,12 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
         (5, "Начало"),
         (6, "Длительность"),
         (7, "Окончание"),
+        (8, "Передано\nЗаказчику"),
+        (9, "Замечания 1"),
+        (10, "Ответы 1"),
+        (11, "Замечания 2"),
+        (12, "Ответы 2"),
+        (13, "Результат\nсогласования"),
     ]
     for col_idx, text in fixed_headers:
         ws.merge_cells(start_row=tbl_start_row, start_column=col_idx, end_row=sub_row, end_column=col_idx)
@@ -218,6 +230,12 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
             (5, start_str, align_center, font_regular),
             (6, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
             (7, finish_str, align_center, font_regular),
+            (8, getattr(phase, "sent_to_client_date", "") or "—", align_center, font_regular),
+            (9, getattr(phase, "client_remarks_1_date", "") or "—", align_center, font_regular),
+            (10, getattr(phase, "designer_answers_1_date", "") or "—", align_center, font_regular),
+            (11, getattr(phase, "client_remarks_2_date", "") or "—", align_center, font_regular),
+            (12, getattr(phase, "designer_answers_2_date", "") or "—", align_center, font_regular),
+            (13, getattr(phase, "approval_result", "") or "—", align_left, font_regular),
         ]
         for col_idx, val, al, fnt in row_vals:
             cell = ws.cell(row=current_row, column=col_idx, value=val)
@@ -259,12 +277,18 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
     # Настройка ширины колонок
     ws.column_dimensions["A"].width = 7.0
-    ws.column_dimensions["B"].width = 48
-    ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 16
-    ws.column_dimensions["E"].width = 13
-    ws.column_dimensions["F"].width = 13
-    ws.column_dimensions["G"].width = 13
+    ws.column_dimensions["B"].width = 46
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["F"].width = 12
+    ws.column_dimensions["G"].width = 12
+    ws.column_dimensions["H"].width = 12
+    ws.column_dimensions["I"].width = 12
+    ws.column_dimensions["J"].width = 12
+    ws.column_dimensions["K"].width = 12
+    ws.column_dimensions["L"].width = 12
+    ws.column_dimensions["M"].width = 20
     ws.column_dimensions["F"].width = 11
     for w in range(1, num_weeks + 1):
         col_letter = get_column_letter(first_week_col + w - 1)

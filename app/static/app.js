@@ -796,6 +796,13 @@ function setupScheduleBlockFilters() {
 }
 setupScheduleBlockFilters();
 
+const chkToggleApprovalDates = document.getElementById("chkToggleApprovalDates");
+if (chkToggleApprovalDates) {
+  chkToggleApprovalDates.addEventListener("change", () => {
+    renderScheduleTable();
+  });
+}
+
 if (btnSchedDetailSections) {
   btnSchedDetailSections.addEventListener("click", () => rebuildScheduleBackend("sections"));
 }
@@ -893,6 +900,9 @@ function renderScheduleTable() {
   }
 
   // 1. Двухуровневая шапка с понятными названиями колонок
+  const chkToggleApprovalDates = document.getElementById("chkToggleApprovalDates");
+  const showApprovalCols = chkToggleApprovalDates ? chkToggleApprovalDates.checked : true;
+
   if (scheduleMonthHeaderRow) {
     let mHtml = `
       <th rowspan="2" class="py-2 px-1 w-10 text-center border-b border-slate-700" title="Включить / исключить этап из графика">Вкл</th>
@@ -905,6 +915,18 @@ function renderScheduleTable() {
       <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.</th>
       <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700">Действия</th>
     `;
+
+    if (showApprovalCols) {
+      mHtml += `
+        <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Дата передачи документации Заказчику на рассмотрение">Передано<br>Заказчику</th>
+        <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Дата поступления замечаний от Заказчика (1-й круг)">Замечания 1</th>
+        <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Дата отправки ответов и снятия замечаний 1">Ответы 1</th>
+        <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Дата повторных замечаний от Заказчика (2-й круг)">Замечания 2</th>
+        <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Дата финального согласования / ответов 2">Ответы 2</th>
+        <th rowspan="2" class="py-2 px-2 w-32 text-center border-l border-b border-amber-600 bg-amber-900/60" title="Статус / результат согласования с Заказчиком">Результат<br>согласования</th>
+      `;
+    }
+
     for (let m = 0; m < numMonths; m++) {
       let label = `Месяц ${m + 1}`;
       if (startDt) {
@@ -926,7 +948,8 @@ function renderScheduleTable() {
   // 2. Отрисовка строк графика с группировкой по видам работ
   scheduleTableBody.innerHTML = "";
   let lastGroup = null;
-  const totalCols = 10 + numWeeks;
+  const extraCols = showApprovalCols ? 6 : 0;
+  const totalCols = 10 + extraCols + numWeeks;
 
   phases.forEach((phase, idx) => {
     const isPhaseEnabled = phase.enabled !== false;
@@ -1032,6 +1055,26 @@ function renderScheduleTable() {
         <button class="sched-move-down text-slate-400 hover:text-blue-600 px-1" data-idx="${idx}" title="Переместить ниже"><i class="fa-solid fa-arrow-down"></i></button>
         <button class="sched-delete text-slate-400 hover:text-rose-600 px-1" data-idx="${idx}" title="Удалить строку"><i class="fa-solid fa-xmark"></i></button>
       </td>
+      ${showApprovalCols ? `
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-sent w-full text-center font-mono text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="ДД.ММ.ГГ" data-idx="${idx}" value="${phase.sent_to_client_date || ""}">
+        </td>
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-rem1 w-full text-center font-mono text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="ДД.ММ.ГГ" data-idx="${idx}" value="${phase.client_remarks_1_date || ""}">
+        </td>
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-ans1 w-full text-center font-mono text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="ДД.ММ.ГГ" data-idx="${idx}" value="${phase.designer_answers_1_date || ""}">
+        </td>
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-rem2 w-full text-center font-mono text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="ДД.ММ.ГГ" data-idx="${idx}" value="${phase.client_remarks_2_date || ""}">
+        </td>
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-ans2 w-full text-center font-mono text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="ДД.ММ.ГГ" data-idx="${idx}" value="${phase.designer_answers_2_date || ""}">
+        </td>
+        <td class="py-1 px-1 border-l border-amber-200 bg-amber-50/30">
+          <input type="text" class="sched-inp-appr-res w-full text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="Результат..." data-idx="${idx}" value="${phase.approval_result || ""}">
+        </td>
+      ` : ""}
       ${weekCellsHtml}
       <td class="py-1.5 px-2 border-l border-slate-100">
         <input type="text" class="sched-inp-note w-full text-xs text-slate-500 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-0.5 bg-transparent" placeholder="Примечание..." data-idx="${idx}" value="${phase.note || ""}">
@@ -1062,6 +1105,43 @@ function renderScheduleTable() {
       const idx = parseInt(e.target.dataset.idx, 10);
       phases[idx].status = e.target.value;
       renderScheduleTable();
+    });
+  });
+
+  document.querySelectorAll(".sched-inp-appr-sent").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].sent_to_client_date = e.target.value;
+    });
+  });
+  document.querySelectorAll(".sched-inp-appr-rem1").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].client_remarks_1_date = e.target.value;
+    });
+  });
+  document.querySelectorAll(".sched-inp-appr-ans1").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].designer_answers_1_date = e.target.value;
+    });
+  });
+  document.querySelectorAll(".sched-inp-appr-rem2").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].client_remarks_2_date = e.target.value;
+    });
+  });
+  document.querySelectorAll(".sched-inp-appr-ans2").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].designer_answers_2_date = e.target.value;
+    });
+  });
+  document.querySelectorAll(".sched-inp-appr-res").forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      phases[idx].approval_result = e.target.value;
     });
   });
 

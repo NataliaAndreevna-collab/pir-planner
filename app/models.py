@@ -85,6 +85,14 @@ class SchedulePhase(BaseModel):
     resp_party: str = "Проектировщик" # "Проектировщик", "Заказчик", "Экспертиза", "Подрядчик"
     enabled: bool = True             # Флаг включения этапа в график (пользователь может отключить ненужные)
 
+    # Поля фиксации документооборота и согласований с Заказчиком:
+    sent_to_client_date: str = ""    # Дата отправки Заказчику (например, "2026-09-24")
+    client_remarks_1_date: str = ""  # Замечания 1 от Заказчика
+    designer_answers_1_date: str = "" # Ответы 1 / снятие замечаний проектировщиком
+    client_remarks_2_date: str = ""  # Повторные замечания 2
+    designer_answers_2_date: str = "" # Финальные ответы 2 / протокол согласования
+    approval_result: str = ""        # Результат: "Согласовано без замечаний", "Замечания сняты", "В рассмотрении Заказчиком"
+
 
 class ProjectData(BaseModel):
     mode: ProjectMode = ProjectMode.PRE_CONTRACT
