@@ -704,16 +704,43 @@ const SCHEDULE_GROUPS = {
   survey: { label: "1. Сбор ИД и изыскания", barClass: "bg-emerald-500 hover:bg-emerald-600" },
   tx_concept: { label: "2. Согласование технологии и Генплана", barClass: "bg-orange-500 hover:bg-orange-600" },
   pd: { label: "3. Проектная документация (стадия ПД)", barClass: "bg-blue-600 hover:bg-blue-700" },
-  approval: { label: "4. Согласование с Заказчиком", barClass: "bg-amber-500 hover:bg-amber-600" },
-  expertise: { label: "5. Экспертиза (ИИ + ПД + Сметы)", barClass: "bg-purple-600 hover:bg-purple-700" },
-  rd: { label: "6. Рабочая документация (стадия РД)", barClass: "bg-teal-600 hover:bg-teal-700" },
-  other: { label: "7. Разрешение на строительство и ввод", barClass: "bg-slate-500 hover:bg-slate-600" },
+  approval: { label: "4. Согласование проектных решений с Заказчиком", barClass: "bg-amber-500 hover:bg-amber-600" },
+  internal_rvk: { label: "5. Внутренняя экспертиза ООО «Тюмень Водоканал» (до 30 дн.)", barClass: "bg-sky-600 hover:bg-sky-700" },
+  expertise: { label: "6. Государственная / негос. экспертиза (ПД + РИИ + Сметы)", barClass: "bg-purple-600 hover:bg-purple-700" },
+  rd: { label: "7. Рабочая документация (стадия РД)", barClass: "bg-teal-600 hover:bg-teal-700" },
+  other: { label: "8. Прочие согласования и завершение", barClass: "bg-slate-500 hover:bg-slate-600" },
 };
 
 const RESP_PARTIES = ["Проектировщик", "Заказчик", "Экспертиза", "Подрядчик", "Заказчик / Проектировщик"];
 const PHASE_STATUSES = ["В работе", "На согласовании", "Согласовано", "Замечания", "Завершено"];
 
 const MONTH_NAMES_SHORT = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+
+function parseDateStr(str) {
+  if (!str) return null;
+  const s = String(str).trim().slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+  const mRu = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (mRu) return new Date(parseInt(mRu[3], 10), parseInt(mRu[2], 10) - 1, parseInt(mRu[1], 10));
+  return null;
+}
+
+function formatDateIso(d) {
+  if (!d || isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDateRu(d) {
+  if (!d || isNaN(d.getTime())) return "";
+  const day = String(d.getDate()).padStart(2, "0");
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const y = d.getFullYear();
+  return `${day}.${m}.${y}`;
+}
 
 function resolveScheduleLocal() {
   if (!currentProject || !currentProject.schedule_phases) return;
@@ -724,32 +751,136 @@ function resolveScheduleLocal() {
     byId[p.id] = p;
   });
 
-  for (let pass = 0; pass < phases.length; pass++) {
+  const baseDt = parseDateStr(currentProject.start_date) || new Date();
+  baseDt.setHours(0, 0, 0, 0);
+
+  function getActiveAncestors(pid, visited = new Set()) {
+    if (visited.has(pid) || !byId[pid]) return [];
+    visited.add(pid);
+    const parent = byId[pid];
+    if (parent.enabled !== false) return [parent];
+    let result = [];
+    (parent.depends_on || []).forEach((gId) => {
+      result = result.concat(getActiveAncestors(gId, visited));
+    });
+    return result;
+  }
+
+  for (let pass = 0; pass < phases.length + 2; pass++) {
     phases.forEach((p) => {
       if (p.enabled === false) return;
+      let activeDeps = [];
       if (p.depends_on && p.depends_on.length > 0) {
-        let maxEnd = 0;
         p.depends_on.forEach((pid) => {
-          const parent = byId[pid];
-          if (parent && parent.enabled !== false) {
-            const pDur = parent.milestone ? 0 : Math.max(1, parent.duration_weeks || 1);
-            const pEnd = (parent.start_week || 1) + pDur;
-            if (pEnd > maxEnd) maxEnd = pEnd;
-          }
+          activeDeps = activeDeps.concat(getActiveAncestors(pid));
         });
-        if (maxEnd > 0) {
-          p.start_week = Math.max(1, maxEnd + (p.lag_weeks || 0));
-        }
       }
-      p.start_week = Math.max(1, parseInt(p.start_week, 10) || 1);
-      p.duration_weeks = p.milestone ? 0 : Math.max(1, parseInt(p.duration_weeks, 10) || 1);
+      const uniqueDeps = [];
+      const seen = new Set();
+      activeDeps.forEach((d) => {
+        if (!seen.has(d.id) && d.id !== p.id) {
+          seen.add(d.id);
+          uniqueDeps.push(d);
+        }
+      });
+
+      const durDays = p.milestone ? 0 : Math.max(1, parseInt(p.duration_days, 10) || (p.duration_weeks ? p.duration_weeks * 7 : 14));
+      p.duration_days = durDays;
+      const lagDays = parseInt(p.lag_days, 10) || (p.lag_weeks ? p.lag_weeks * 7 : 0);
+
+      if (uniqueDeps.length > 0) {
+        let maxDepFinish = new Date(baseDt.getTime());
+        uniqueDeps.forEach((parent) => {
+          let pFin = parseDateStr(parent.finish_date);
+          if (!pFin) {
+            const pSt = parseDateStr(parent.start_date) || baseDt;
+            const pD = parent.milestone ? 0 : Math.max(1, parseInt(parent.duration_days, 10) || 14);
+            pFin = parent.milestone ? pSt : new Date(pSt.getTime() + Math.max(0, pD - 1) * 86400000);
+          }
+          if (pFin.getTime() > maxDepFinish.getTime()) maxDepFinish = pFin;
+        });
+
+        let calcStart;
+        if (p.milestone) {
+          calcStart = new Date(maxDepFinish.getTime() + lagDays * 86400000);
+        } else {
+          calcStart = new Date(maxDepFinish.getTime() + (1 + lagDays) * 86400000);
+        }
+        if (calcStart.getTime() < baseDt.getTime()) calcStart = new Date(baseDt.getTime());
+        p.start_date = formatDateIso(calcStart);
+      } else {
+        if (!p.start_date) p.start_date = formatDateIso(baseDt);
+      }
+
+      const stDt = parseDateStr(p.start_date) || baseDt;
+      if (p.milestone) {
+        p.finish_date = p.start_date;
+      } else {
+        p.finish_date = formatDateIso(new Date(stDt.getTime() + Math.max(0, durDays - 1) * 86400000));
+      }
     });
   }
+
+  // Нормализация: если минимальная дата старта активных этапов позже baseDt, сдвигаем весь график к baseDt
+  const enabledPhases = phases.filter((p) => p.enabled !== false);
+  if (enabledPhases.length > 0) {
+    let earliestTime = Infinity;
+    enabledPhases.forEach((p) => {
+      const st = parseDateStr(p.start_date) || baseDt;
+      if (st.getTime() < earliestTime) earliestTime = st.getTime();
+    });
+    if (earliestTime > baseDt.getTime()) {
+      const shiftMs = earliestTime - baseDt.getTime();
+      enabledPhases.forEach((p) => {
+        const oldSt = parseDateStr(p.start_date) || baseDt;
+        const newSt = new Date(oldSt.getTime() - shiftMs);
+        p.start_date = formatDateIso(newSt);
+        if (p.milestone) {
+          p.finish_date = p.start_date;
+        } else {
+          p.finish_date = formatDateIso(new Date(newSt.getTime() + Math.max(0, p.duration_days - 1) * 86400000));
+        }
+      });
+    }
+  }
+
+  // Синхронизация недель для совместимости
+  phases.forEach((p) => {
+    const st = parseDateStr(p.start_date) || baseDt;
+    const dayOffset = Math.max(0, Math.floor((st.getTime() - baseDt.getTime()) / 86400000));
+    p.start_week = Math.max(1, Math.floor(dayOffset / 7) + 1);
+    p.duration_weeks = p.milestone ? 0 : Math.max(1, Math.round(p.duration_days / 7));
+  });
 }
 
 async function rebuildScheduleBackend(detailOverride = null) {
   if (!currentProject) return;
   syncProjectFromInputs();
+
+  // Сохраняем состояние отключенных этапов и блоков перед перестроением
+  const disabledNames = new Set();
+  const disabledGroups = new Set();
+  if (currentProject.schedule_phases) {
+    currentProject.schedule_phases.forEach((p) => {
+      if (p.enabled === false) {
+        disabledNames.add(p.name);
+        disabledGroups.add(p.group);
+      }
+    });
+  }
+
+  // Также проверяем верхние чекбоксы блоков
+  const blockFilterStates = {
+    precontract: document.getElementById("chkFilterPrecontract") ? document.getElementById("chkFilterPrecontract").checked : true,
+    survey: document.getElementById("chkFilterSurvey") ? document.getElementById("chkFilterSurvey").checked : true,
+    tx_concept: document.getElementById("chkFilterConcept") ? document.getElementById("chkFilterConcept").checked : true,
+    pd: document.getElementById("chkFilterPd") ? document.getElementById("chkFilterPd").checked : true,
+    approval: document.getElementById("chkFilterApproval") ? document.getElementById("chkFilterApproval").checked : true,
+    internal_rvk: document.getElementById("chkFilterInternalExp") ? document.getElementById("chkFilterInternalExp").checked : true,
+    expertise: document.getElementById("chkFilterExpertise") ? document.getElementById("chkFilterExpertise").checked : true,
+    rd: document.getElementById("chkFilterRd") ? document.getElementById("chkFilterRd").checked : true,
+  };
+
   if (detailOverride) currentProject.schedule_detail = detailOverride;
   const q = currentProject.schedule_detail ? `?detail=${currentProject.schedule_detail}` : "";
   try {
@@ -760,6 +891,21 @@ async function rebuildScheduleBackend(detailOverride = null) {
     });
     if (res.ok) {
       currentProject = await res.json();
+
+      // Восстанавливаем состояние отключенных этапов и блоков
+      if (currentProject.schedule_phases) {
+        currentProject.schedule_phases.forEach((p) => {
+          // Если блок выключен верхним чекбоксом
+          if (blockFilterStates[p.group] === false) {
+            p.enabled = false;
+          } else if (disabledNames.has(p.name)) {
+            // Или если этап был выключен точечно по имени
+            p.enabled = false;
+          }
+        });
+      }
+
+      resolveScheduleLocal();
       renderScheduleTable();
     }
   } catch (err) {
@@ -767,15 +913,17 @@ async function rebuildScheduleBackend(detailOverride = null) {
   }
 }
 
-// Чекбоксы фильтрации блоков графика (Этап 0, Изыскания, Концепция, Согласования, Внутренняя экспертиза РВК, Госэкспертиза)
+// Чекбоксы фильтрации блоков графика (Этап 0, Изыскания, Концепция, ПД, Согласования, Внутренняя экспертиза РВК, Госэкспертиза, РД)
 function setupScheduleBlockFilters() {
   const mapFilters = [
     { id: "chkFilterPrecontract", groups: ["precontract"] },
     { id: "chkFilterSurvey", groups: ["survey"] },
     { id: "chkFilterConcept", groups: ["tx_concept"] },
+    { id: "chkFilterPd", groups: ["pd"] },
     { id: "chkFilterApproval", groups: ["approval"] },
-    { id: "chkFilterInternalExp", customFilter: (p) => p.group === "expertise" && (p.name.includes("РВК") || p.name.includes("внутренн")) },
-    { id: "chkFilterExpertise", customFilter: (p) => p.group === "expertise" && !(p.name.includes("РВК") || p.name.includes("внутренн")) },
+    { id: "chkFilterInternalExp", groups: ["internal_rvk"] },
+    { id: "chkFilterExpertise", groups: ["expertise"] },
+    { id: "chkFilterRd", groups: ["rd"] },
   ];
 
   mapFilters.forEach(({ id, groups, customFilter }) => {
@@ -876,32 +1024,34 @@ function renderScheduleTable() {
   }
 
   const phases = currentProject.schedule_phases;
-  const maxWeekRaw = phases.reduce((max, p) => {
-    if (p.enabled === false) return max;
-    const endW = p.milestone ? p.start_week : p.start_week + Math.max(1, p.duration_weeks) - 1;
-    return Math.max(max, endW);
-  }, 8);
 
-  const numMonths = Math.max(2, Math.ceil(maxWeekRaw / 4));
-  const numWeeks = numMonths * 4;
-  const approxMonths = (maxWeekRaw / 4.33).toFixed(1);
-  totalDurationLabel.textContent = `${maxWeekRaw} нед. (~${approxMonths} мес.)`;
+  // Базовая дата старта проекта
+  const baseDt = parseDateStr(currentProject.start_date) || new Date();
+  baseDt.setHours(0, 0, 0, 0);
+  const baseYear = baseDt.getFullYear();
+  const baseMonth = baseDt.getMonth(); // 0-based
 
-  let startDt = null;
-  if (inputStartDate && inputStartDate.value) {
-    const parsed = new Date(inputStartDate.value + "T00:00:00");
-    if (!isNaN(parsed.getTime())) startDt = parsed;
-  }
+  // Определение максимальной даты окончания среди активных этапов
+  const enabledPhases = phases.filter((p) => p.enabled !== false);
+  let maxFinishDt = new Date(baseDt.getTime());
+  enabledPhases.forEach((p) => {
+    const fDt = parseDateStr(p.finish_date);
+    if (fDt && fDt.getTime() > maxFinishDt.getTime()) maxFinishDt = fDt;
+  });
+
+  const monthDiff = (maxFinishDt.getFullYear() - baseYear) * 12 + (maxFinishDt.getMonth() - baseMonth) + 1;
+  const numMonths = Math.max(2, monthDiff);
+  const numDecades = numMonths * 3;
+
+  const totalCalDays = Math.max(1, Math.round((maxFinishDt.getTime() - baseDt.getTime()) / 86400000) + 1);
+  const approxMonths = (totalCalDays / 30.4375).toFixed(1);
+  totalDurationLabel.textContent = `${totalCalDays} кал. дн. (~${approxMonths} мес.)`;
+
   if (finishDateLabel) {
-    if (startDt) {
-      const endDt = new Date(startDt.getTime() + maxWeekRaw * 7 * 86400000);
-      finishDateLabel.textContent = endDt.toLocaleDateString("ru-RU");
-    } else {
-      finishDateLabel.textContent = "—";
-    }
+    finishDateLabel.textContent = formatDateRu(maxFinishDt);
   }
 
-  // 1. Двухуровневая шапка с понятными названиями колонок
+  // 1. Двухуровневая шапка с понятными названиями колонок и числами месяца
   const showApprovalCols = chkToggleApprovalDates ? chkToggleApprovalDates.checked : true;
 
   if (scheduleMonthHeaderRow) {
@@ -912,8 +1062,9 @@ function renderScheduleTable() {
       <th rowspan="2" class="py-2 px-2 w-28 text-center border-l border-b border-slate-700">Вид работ</th>
       <th rowspan="2" class="py-2 px-2 w-28 text-center border-l border-b border-slate-700">Ответственный</th>
       <th rowspan="2" class="py-2 px-2 w-24 text-center border-l border-b border-slate-700">Статус</th>
-      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Номер недели начала этапа от старта проекта">Начало</th>
-      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в неделях">Длительн.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-slate-700" title="Календарная дата начала">Начало</th>
+      <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700" title="Продолжительность выполнения этапа в календарных днях">Длительн.</th>
+      <th rowspan="2" class="py-2 px-1.5 w-24 text-center border-l border-b border-slate-700" title="Календарная дата окончания">Окончание</th>
       <th rowspan="2" class="py-2 px-1.5 w-16 text-center border-l border-b border-slate-700">Действия</th>
     `;
 
@@ -929,28 +1080,33 @@ function renderScheduleTable() {
     }
 
     for (let m = 0; m < numMonths; m++) {
-      let label = `Месяц ${m + 1}`;
-      if (startDt) {
-        const mDate = new Date(startDt.getTime() + m * 30.4375 * 86400000);
-        label = `М${m + 1} (${MONTH_NAMES_SHORT[mDate.getMonth()]} ${String(mDate.getFullYear()).slice(-2)})`;
-      }
-      mHtml += `<th colspan="4" class="py-1.5 px-1 text-center text-[11px] font-bold bg-slate-800 border-l border-b border-slate-600">${label}</th>`;
+      const curM = (baseMonth + m) % 12;
+      const curY = baseYear + Math.floor((baseMonth + m) / 12);
+      const label = `${MONTH_NAMES_SHORT[curM]} ${String(curY).slice(-2)}`;
+      mHtml += `<th colspan="3" class="py-1.5 px-1 text-center text-[11px] font-bold bg-slate-800 border-l border-b border-slate-600">${label}</th>`;
     }
     mHtml += `<th rowspan="2" class="py-2 px-3 min-w-[150px] border-l border-b border-slate-700">Примечание</th>`;
     scheduleMonthHeaderRow.innerHTML = mHtml;
   }
 
-  let wHtml = "";
-  for (let w = 1; w <= numWeeks; w++) {
-    wHtml += `<th class="py-1 px-0.5 text-center text-[10px] font-mono w-7 bg-slate-700 border-l border-slate-600">Н${w}</th>`;
+  // Нижний уровень шапки: числа 1-10, 11-20, 21-30/31
+  let dHtml = "";
+  for (let m = 0; m < numMonths; m++) {
+    const curM = (baseMonth + m) % 12;
+    const curY = baseYear + Math.floor((baseMonth + m) / 12);
+    const lastDay = new Date(curY, curM + 1, 0).getDate();
+    const decLabels = ["1-10", "11-20", `21-${lastDay}`];
+    decLabels.forEach((lbl) => {
+      dHtml += `<th class="py-1 px-0.5 text-center text-[9px] font-mono w-10 bg-slate-700 border-l border-slate-600">${lbl}</th>`;
+    });
   }
-  scheduleHeaderRow.innerHTML = wHtml;
+  scheduleHeaderRow.innerHTML = dHtml;
 
   // 2. Отрисовка строк графика с группировкой по видам работ
   scheduleTableBody.innerHTML = "";
   let lastGroup = null;
   const extraCols = showApprovalCols ? 6 : 0;
-  const totalCols = 10 + extraCols + numWeeks;
+  const totalCols = 11 + extraCols + numDecades;
 
   phases.forEach((phase, idx) => {
     const isPhaseEnabled = phase.enabled !== false;
@@ -967,8 +1123,17 @@ function renderScheduleTable() {
     const tr = document.createElement("tr");
     tr.className = `hover:bg-blue-50/30 transition border-b border-slate-100 ${!isPhaseEnabled ? "opacity-40 bg-slate-50" : ""} ${phase.milestone ? "bg-amber-50/40" : ""}`;
 
-    const pStart = phase.start_week;
-    const pEnd = phase.milestone ? phase.start_week : phase.start_week + Math.max(1, phase.duration_weeks) - 1;
+    const pStartDt = parseDateStr(phase.start_date) || baseDt;
+    const pFinishDt = parseDateStr(phase.finish_date) || pStartDt;
+    const durDays = phase.milestone ? 0 : Math.max(1, parseInt(phase.duration_days, 10) || 14);
+
+    // Вычисляем индексы декад для Ганта
+    const startDecIdx = ((pStartDt.getFullYear() - baseYear) * 12 + (pStartDt.getMonth() - baseMonth)) * 3 +
+      (pStartDt.getDate() <= 10 ? 0 : (pStartDt.getDate() <= 20 ? 1 : 2));
+
+    const finishDecIdx = ((pFinishDt.getFullYear() - baseYear) * 12 + (pFinishDt.getMonth() - baseMonth)) * 3 +
+      (pFinishDt.getDate() <= 10 ? 0 : (pFinishDt.getDate() <= 20 ? 1 : 2));
+
     const grpInfo = SCHEDULE_GROUPS[grp] || SCHEDULE_GROUPS.other;
 
     let groupOptionsHtml = "";
@@ -987,35 +1152,35 @@ function renderScheduleTable() {
       statusOptionsHtml += `<option value="${st}" ${(phase.status || "В работе") === st ? "selected" : ""}>${st}</option>`;
     });
 
-    let weekCellsHtml = "";
-    for (let w = 1; w <= numWeeks; w++) {
-      const isMonthStart = (w - 1) % 4 === 0;
+    let decadeCellsHtml = "";
+    for (let d = 0; d < numDecades; d++) {
+      const isMonthStart = d % 3 === 0;
       const borderCls = isMonthStart ? "border-l border-slate-300" : "border-l border-slate-100";
       if (!isPhaseEnabled) {
-        weekCellsHtml += `<td class="p-0.5 ${borderCls} bg-slate-50"></td>`;
+        decadeCellsHtml += `<td class="p-0.5 ${borderCls} bg-slate-50"></td>`;
       } else if (phase.milestone) {
-        if (w === pStart) {
-          weekCellsHtml += `
-            <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните для переноса вехи на Н${w}">
+        if (d === startDecIdx) {
+          decadeCellsHtml += `
+            <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-dec="${d}" title="Кликните для переноса вехи">
               <div class="h-5 flex items-center justify-center text-amber-600 text-sm font-black">◆</div>
             </td>
           `;
         } else {
-          weekCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-amber-100/50 gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните для переноса вехи на Н${w}"></td>`;
+          decadeCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-amber-100/50 gantt-cell" data-idx="${idx}" data-dec="${d}" title="Кликните для переноса вехи"></td>`;
         }
-      } else if (w >= pStart && w <= pEnd) {
-        const isFirst = w === pStart;
-        const isLast = w === pEnd;
+      } else if (d >= startDecIdx && d <= finishDecIdx) {
+        const isFirst = d === startDecIdx;
+        const isLast = d === finishDecIdx;
         const roundCls = `${isFirst ? "rounded-l" : ""} ${isLast ? "rounded-r" : ""}`;
-        weekCellsHtml += `
-          <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-week="${w}" title="Н${pStart}–Н${pEnd} (${phase.duration_weeks} нед.). Клик = старт, Shift+клик = длительность">
+        decadeCellsHtml += `
+          <td class="p-0.5 text-center ${borderCls} cursor-pointer gantt-cell" data-idx="${idx}" data-dec="${d}" title="${formatDateRu(pStartDt)} – ${formatDateRu(pFinishDt)} (${durDays} дн.). Клик = старт, Shift+клик = длительность">
             <div class="h-5 ${roundCls} ${grpInfo.barClass} flex items-center justify-center text-white text-[9px] font-bold shadow-2xs">
-              ${isFirst ? phase.duration_weeks + "н" : ""}
+              ${isFirst ? durDays + "д" : ""}
             </div>
           </td>
         `;
       } else {
-        weekCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-blue-100/40 gantt-cell" data-idx="${idx}" data-week="${w}" title="Кликните, чтобы поставить начало на Н${w} (Shift+клик — растянуть длительность до Н${w})"></td>`;
+        decadeCellsHtml += `<td class="p-0.5 ${borderCls} cursor-pointer hover:bg-blue-100/40 gantt-cell" data-idx="${idx}" data-dec="${d}" title="Кликните, чтобы переместить начало (Shift+клик — растянуть длительность)"></td>`;
       }
     }
 
@@ -1046,10 +1211,13 @@ function renderScheduleTable() {
         </select>
       </td>
       <td class="py-1.5 px-1 border-l border-slate-100">
-        <input type="number" step="1" min="1" max="200" class="sched-inp-start w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white text-blue-700" data-idx="${idx}" value="${phase.start_week}" title="Неделя начала работ от старта проекта">
+        <input type="date" class="sched-inp-start-date w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white text-blue-700" data-idx="${idx}" value="${phase.start_date || formatDateIso(pStartDt)}" title="Календарная дата начала">
       </td>
       <td class="py-1.5 px-1 border-l border-slate-100">
-        <input type="number" step="1" min="0" max="100" class="sched-inp-dur w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${phase.milestone ? "bg-slate-100 text-slate-400" : "bg-white"}" data-idx="${idx}" value="${phase.milestone ? 0 : phase.duration_weeks}" ${phase.milestone ? "disabled" : ""} title="Длительность этапа в неделях">
+        <input type="number" step="1" min="0" max="365" class="sched-inp-dur w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 ${phase.milestone ? "bg-slate-100 text-slate-400" : "bg-white"}" data-idx="${idx}" value="${phase.milestone ? 0 : durDays}" ${phase.milestone ? "disabled" : ""} title="Длительность этапа в календарных днях">
+      </td>
+      <td class="py-1.5 px-1 border-l border-slate-100">
+        <input type="date" class="sched-inp-finish-date w-full text-center font-mono text-xs font-semibold border border-slate-200 rounded px-1 py-0.5 bg-slate-50 text-slate-700" data-idx="${idx}" value="${phase.finish_date || formatDateIso(pFinishDt)}" disabled title="Календарная дата окончания">
       </td>
       <td class="py-1.5 px-1 text-center border-l border-slate-100 whitespace-nowrap">
         <button class="sched-move-up text-slate-400 hover:text-blue-600 px-1" data-idx="${idx}" title="Переместить выше"><i class="fa-solid fa-arrow-up"></i></button>
@@ -1076,7 +1244,7 @@ function renderScheduleTable() {
           <input type="text" class="sched-inp-appr-res w-full text-[11px] border border-transparent hover:border-amber-300 focus:border-amber-500 rounded px-1 py-0.5 bg-transparent" placeholder="Результат..." data-idx="${idx}" value="${phase.approval_result || ""}">
         </td>
       ` : ""}
-      ${weekCellsHtml}
+      ${decadeCellsHtml}
       <td class="py-1.5 px-2 border-l border-slate-100">
         <input type="text" class="sched-inp-note w-full text-xs text-slate-500 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:bg-white rounded px-1.5 py-0.5 bg-transparent" placeholder="Примечание..." data-idx="${idx}" value="${phase.note || ""}">
       </td>
@@ -1195,12 +1363,11 @@ function renderScheduleTable() {
     });
   });
 
-  document.querySelectorAll(".sched-inp-start").forEach((inp) => {
+  document.querySelectorAll(".sched-inp-start-date").forEach((inp) => {
     inp.addEventListener("change", (e) => {
       const idx = parseInt(e.target.dataset.idx, 10);
-      const newStart = Math.max(1, parseInt(e.target.value, 10) || 1);
       phases[idx].depends_on = [];
-      phases[idx].start_week = newStart;
+      phases[idx].start_date = e.target.value;
       resolveScheduleLocal();
       renderScheduleTable();
     });
@@ -1212,10 +1379,12 @@ function renderScheduleTable() {
       const val = Math.max(0, parseInt(e.target.value, 10) || 0);
       if (val === 0) {
         phases[idx].milestone = true;
+        phases[idx].duration_days = 0;
         phases[idx].duration_weeks = 0;
       } else {
         phases[idx].milestone = false;
-        phases[idx].duration_weeks = val;
+        phases[idx].duration_days = val;
+        phases[idx].duration_weeks = Math.max(1, Math.round(val / 7));
       }
       resolveScheduleLocal();
       renderScheduleTable();
@@ -1226,7 +1395,8 @@ function renderScheduleTable() {
     btn.addEventListener("click", (e) => {
       const idx = parseInt(e.currentTarget.dataset.idx, 10);
       phases[idx].milestone = !phases[idx].milestone;
-      phases[idx].duration_weeks = phases[idx].milestone ? 0 : Math.max(1, phases[idx].duration_weeks || 2);
+      phases[idx].duration_days = phases[idx].milestone ? 0 : Math.max(1, phases[idx].duration_days || 14);
+      phases[idx].duration_weeks = phases[idx].milestone ? 0 : Math.max(1, Math.round(phases[idx].duration_days / 7));
       resolveScheduleLocal();
       renderScheduleTable();
     });
@@ -1272,22 +1442,26 @@ function renderScheduleTable() {
   document.querySelectorAll(".gantt-cell").forEach((cell) => {
     cell.addEventListener("click", (e) => {
       const idx = parseInt(e.currentTarget.dataset.idx, 10);
-      const clickedWeek = parseInt(e.currentTarget.dataset.week, 10);
+      const clickedDec = parseInt(e.currentTarget.dataset.dec, 10);
       const p = phases[idx];
       if (!p) return;
 
+      // Декадный перенос даты старта
+      const mIdx = Math.floor(clickedDec / 3);
+      const dInM = clickedDec % 3;
+      const targetDay = dInM === 0 ? 1 : (dInM === 1 ? 11 : 21);
+      const targetYear = baseYear + Math.floor((baseMonth + mIdx) / 12);
+      const targetMonth = (baseMonth + mIdx) % 12;
+      const newStDate = new Date(targetYear, targetMonth, targetDay);
+
       if (e.shiftKey && !p.milestone) {
-        if (clickedWeek >= p.start_week) {
-          p.duration_weeks = clickedWeek - p.start_week + 1;
-        } else {
-          const oldEnd = p.start_week + p.duration_weeks - 1;
-          p.depends_on = [];
-          p.start_week = clickedWeek;
-          p.duration_weeks = Math.max(1, oldEnd - clickedWeek + 1);
+        const curSt = parseDateStr(p.start_date) || baseDt;
+        if (newStDate.getTime() >= curSt.getTime()) {
+          p.duration_days = Math.max(1, Math.round((newStDate.getTime() - curSt.getTime()) / 86400000) + 10);
         }
       } else {
         p.depends_on = [];
-        p.start_week = clickedWeek;
+        p.start_date = formatDateIso(newStDate);
       }
       resolveScheduleLocal();
       renderScheduleTable();

@@ -1,6 +1,8 @@
 """
 Справочники разделов ПД (ПП РФ № 87), марок РД (ГОСТ Р 21.101) и построение календарного графика.
 """
+import calendar
+import datetime
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -221,10 +223,11 @@ GROUPS: Dict[str, str] = {
     "survey": "Сбор ИД и инженерные изыскания",
     "tx_concept": "Согласование технологии и концепции",
     "pd": "Проектная документация (стадия ПД)",
-    "approval": "Согласование проектных решений",
-    "expertise": "Государственная / негосударственная экспертиза",
+    "approval": "Согласование проектных решений с Заказчиком",
+    "internal_rvk": "Внутренняя экспертиза ООО «Тюмень Водоканал» (до 30 дн.)",
+    "expertise": "Государственная / негосударственная экспертиза (ПД + РИИ + Сметы)",
     "rd": "Рабочая документация (стадия РД)",
-    "other": "Разрешение на строительство и ввод",
+    "other": "Прочие согласования и завершение",
 }
 
 # Цвета групп (hex без #) - используются в Excel и в интерфейсе
@@ -234,18 +237,21 @@ GROUP_COLORS: Dict[str, str] = {
     "tx_concept": "F97316",  # Оранжевый (Технология)
     "pd": "2563EB",          # Синий (ПД)
     "approval": "D97706",    # Янтарный (Согласования)
-    "expertise": "9333EA",   # Пурпурный (Экспертиза)
+    "internal_rvk": "0284C7",# Сине-голубой / морской (Внутренняя экспертиза РВК)
+    "expertise": "9333EA",   # Пурпурный (Госэкспертиза)
     "rd": "0D9488",          # Бирюзовый (РД)
-    "other": "64748B",       # Серо-голубой (Прочее / РнС)
+    "other": "64748B",       # Серо-голубой (Прочее)
 }
 
-# Типовые длительности разработки разделов ПД, недель
-PD_DURATION = {
-    "pz": 2, "pzu": 4, "ar": 6, "kr": 8, "ios1": 6, "ios2": 6, "ios3": 6, "ios4": 6,
-    "ios5_1": 5, "ios5_2": 6, "ios6": 5, "tx": 7, "pos": 4, "pod": 3, "oos": 5, "pb": 4,
-    "tbe": 2, "odi": 2, "sm": 4, "sm_p": 3, "sm_vor": 3, "gochs": 3, "ee": 2,
-    "ppo": 4, "tkr": 8, "lin_infra": 6, "rekult": 3,
+# Типовые длительности разработки разделов ПД, в календарных днях (и неделях)
+PD_DURATION_DAYS = {
+    "pz": 14, "pzu": 28, "ar": 42, "kr": 56, "ios1": 42, "ios2": 42, "ios3": 42, "ios4": 42,
+    "ios5_1": 35, "ios5_2": 42, "ios6": 35, "tx": 49, "pos": 28, "pod": 21, "oos": 35, "pb": 28,
+    "tbe": 14, "odi": 14, "sm": 28, "sm_p": 21, "sm_vor": 21, "gochs": 21, "ee": 14,
+    "ppo": 28, "tkr": 56, "lin_infra": 42, "rekult": 21,
 }
+PD_DURATION = {k: v // 7 for k, v in PD_DURATION_DAYS.items()}
+RD_DURATION_DAYS = {"rd_kzh": 56, "rd_tx": 49, "rd_gp": 28, "rd_sm": 28}
 RD_DURATION = {"rd_kzh": 8, "rd_tx": 7, "rd_gp": 4, "rd_sm": 4}
 
 # Очередность разработки разделов ПД (волны)
@@ -262,6 +268,37 @@ def short_title(title: str) -> str:
     return t[:90]
 
 
+def parse_date(date_str: str) -> Optional[datetime.date]:
+    """Парсит строку даты вида ГГГГ-ММ-ДД или ДД.ММ.ГГГГ."""
+    if not date_str:
+        return None
+    s = date_str.strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y/%m/%d"):
+        try:
+            return datetime.datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def format_date_iso(dt: Optional[datetime.date]) -> str:
+    return dt.strftime("%Y-%m-%d") if dt else ""
+
+
+def format_date_ru(dt: Optional[datetime.date]) -> str:
+    return dt.strftime("%d.%m.%Y") if dt else ""
+
+
+def date_to_decade_index(dt: datetime.date, base_y: int, base_m: int) -> int:
+    """
+    Возвращает 0-based индекс декады относительно года и месяца базового старта проекта.
+    Декада 0: 1-10 число, 1: 11-20 число, 2: 21-конец месяца.
+    """
+    month_offset = (dt.year - base_y) * 12 + (dt.month - base_m)
+    dec = 0 if dt.day <= 10 else (1 if dt.day <= 20 else 2)
+    return month_offset * 3 + dec
+
+
 def phase_end_excl(p: SchedulePhase) -> int:
     """Неделя, следующая за окончанием этапа (для вехи - следующая за неделей вехи)."""
     if p.milestone:
@@ -269,30 +306,122 @@ def phase_end_excl(p: SchedulePhase) -> int:
     return p.start_week + max(p.duration_weeks, 1)
 
 
-def resolve_schedule(phases: List[SchedulePhase]) -> None:
-    """Пересчет начала этапов по зависимостям: начало = max(окончание предшественников) + сдвиг."""
+def resolve_schedule(phases: List[SchedulePhase], base_start_date_str: str = "") -> None:
+    """
+    Пересчет начала и окончания этапов по зависимостям:
+    - Расчет ведется в точных календарных днях и датах.
+    - Начало этапа = max(окончание активных предшественников + 1 день) + lag_days.
+    - При отключении предшественников активные зависимости ищутся транзитивно.
+    - Если минимальный старт среди включенных этапов сдвинут, график автоматически нормализуется
+      к базовой дате проекта (start_date).
+    - Также заполняются start_week и duration_weeks для обратной совместимости.
+    """
+    base_dt = parse_date(base_start_date_str) or datetime.date.today()
     by_id = {p.id: p for p in phases}
+
+    def get_active_ancestors(pid: int, visited: Optional[set] = None) -> List[SchedulePhase]:
+        """Рекурсивно находит ближайших включенных (enabled) предшественников."""
+        if visited is None:
+            visited = set()
+        if pid in visited or pid not in by_id:
+            return []
+        visited.add(pid)
+        parent = by_id[pid]
+        if getattr(parent, "enabled", True):
+            return [parent]
+        result = []
+        for grand_id in parent.depends_on:
+            result.extend(get_active_ancestors(grand_id, visited))
+        return result
+
+    # 1. Топологический расчет дат старта и окончания в днях
     for _ in range(len(phases) + 2):
         changed = False
         for p in phases:
             if not getattr(p, "enabled", True):
                 continue
-            deps = [by_id[d] for d in p.depends_on if d in by_id and d != p.id and getattr(by_id[d], "enabled", True)]
+            deps = []
+            for d in p.depends_on:
+                deps.extend(get_active_ancestors(d))
+            deps = [d for d in {d.id: d for d in deps}.values() if d.id != p.id]
+
+            # Длительность в днях
+            dur_days = 0 if p.milestone else max(1, getattr(p, "duration_days", 0) or (p.duration_weeks * 7 if p.duration_weeks else 14))
+            p.duration_days = 0 if p.milestone else dur_days
+            lag_d = getattr(p, "lag_days", 0) or (p.lag_weeks * 7)
+
             if deps:
-                base = max(phase_end_excl(d) for d in deps) + p.lag_weeks
+                # Финиш предшественников
+                dep_end_dates = []
+                for d in deps:
+                    d_finish = parse_date(d.finish_date)
+                    if not d_finish:
+                        d_start = parse_date(d.start_date) or base_dt
+                        d_dur = 0 if d.milestone else max(1, getattr(d, "duration_days", 14))
+                        d_finish = d_start if d.milestone else d_start + datetime.timedelta(days=max(0, d_dur - 1))
+                    dep_end_dates.append(d_finish)
+
+                max_dep_finish = max(dep_end_dates)
                 if p.milestone:
-                    base -= 1
-                new_start = max(1, base)
-                if new_start != p.start_week:
-                    p.start_week = new_start
-                    changed = True
-            elif p.start_week < 1:
-                p.start_week = 1
+                    calc_start = max_dep_finish + datetime.timedelta(days=lag_d)
+                else:
+                    calc_start = max_dep_finish + datetime.timedelta(days=1 + lag_d)
+                new_start_dt = max(base_dt, calc_start)
+            else:
+                new_start_dt = base_dt
+
+            curr_start_dt = parse_date(p.start_date)
+            if curr_start_dt != new_start_dt:
+                p.start_date = format_date_iso(new_start_dt)
                 changed = True
+
+            # Вычисляем finish_date
             if p.milestone:
-                p.duration_weeks = 0
+                new_finish_dt = new_start_dt
+            else:
+                new_finish_dt = new_start_dt + datetime.timedelta(days=max(0, p.duration_days - 1))
+            if parse_date(p.finish_date) != new_finish_dt:
+                p.finish_date = format_date_iso(new_finish_dt)
+                changed = True
+
         if not changed:
             break
+
+    # 2. Нормализация к базовой дате: если все активные этапы начинаются позже base_dt
+    enabled_phases = [p for p in phases if getattr(p, "enabled", True)]
+    if enabled_phases:
+        earliest_start = min(parse_date(p.start_date) or base_dt for p in enabled_phases)
+        if earliest_start > base_dt:
+            shift_days = (earliest_start - base_dt).days
+            for p in enabled_phases:
+                p_st = parse_date(p.start_date) or base_dt
+                new_st = p_st - datetime.timedelta(days=shift_days)
+                p.start_date = format_date_iso(new_st)
+                if p.milestone:
+                    p.finish_date = p.start_date
+                else:
+                    p.finish_date = format_date_iso(new_st + datetime.timedelta(days=max(0, p.duration_days - 1)))
+
+    # 3. Синхронизируем start_week и duration_weeks для совместимости со старыми вызовами
+    for p in enabled_phases:
+        p_st = parse_date(p.start_date) or base_dt
+        day_offset = max(0, (p_st - base_dt).days)
+        p.start_week = max(1, (day_offset // 7) + 1)
+        p.duration_weeks = 0 if p.milestone else max(1, int(round(p.duration_days / 7.0)))
+
+
+def total_calendar_days(phases: List[SchedulePhase], base_start_date_str: str = "") -> int:
+    """Вычисляет суммарную продолжительность проекта в календарных днях."""
+    enabled_phases = [p for p in phases if getattr(p, "enabled", True)]
+    if not enabled_phases:
+        return 0
+    base_dt = parse_date(base_start_date_str) or parse_date(enabled_phases[0].start_date) or datetime.date.today()
+    max_finish = base_dt
+    for p in enabled_phases:
+        f_dt = parse_date(p.finish_date)
+        if f_dt and f_dt > max_finish:
+            max_finish = f_dt
+    return max(1, (max_finish - base_dt).days + 1)
 
 
 def total_weeks(phases: List[SchedulePhase]) -> int:
@@ -302,22 +431,27 @@ def total_weeks(phases: List[SchedulePhase]) -> int:
 
 def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[SchedulePhase]:
     """
-    Строит календарный график по составу проекта и признакам ТЗ.
+    Строит календарный график по составу проекта и признакам ТЗ в точных календарных днях.
     detail = "sections" - по разделам/маркам, "stages" - укрупненно по стадиям.
     Учитывает преддоговорной этап (Этап 0), передачу ИД Заказчиком (Этап 1),
-    согласование технологии/концепции, экспертизу и вехи К0-К6.
+    согласование технологии/концепции, экспертизу и вехи К0-К5.
     """
     detail = detail or project.schedule_detail or "sections"
     flags = project.schedule_flags or {}
     phases: List[SchedulePhase] = []
     counter = [0]
 
-    def add(name, group, dur, deps=None, lag=0, milestone=False, note="", resp_party="Проектировщик", status="В работе", enabled=True) -> int:
+    def add(name, group, dur_days, deps=None, lag_days=0, milestone=False, note="", resp_party="Проектировщик", status="В работе", enabled=True) -> int:
         counter[0] += 1
+        d_days = 0 if milestone else max(1, int(dur_days))
+        d_weeks = 0 if milestone else max(1, int(round(d_days / 7.0)))
+        lag_d = int(lag_days)
+        lag_w = int(round(lag_d / 7.0))
         phases.append(SchedulePhase(
             id=counter[0], name=name, group=group, start_week=1,
-            duration_weeks=0 if milestone else max(1, int(dur)),
-            depends_on=list(deps or []), lag_weeks=lag, milestone=milestone, note=note,
+            duration_weeks=d_weeks, duration_days=d_days,
+            depends_on=list(deps or []), lag_weeks=lag_w, lag_days=lag_d,
+            milestone=milestone, note=note,
             resp_party=resp_party, status=status, enabled=enabled,
         ))
         return counter[0]
@@ -328,7 +462,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     contract_phase_id = add(
         "Согласование существенных условий, заключение договора на ПИР",
         "precontract",
-        2,  # 2 недели (~10-14 дней)
+        14,  # 14 календарных дней
         note="Согласование сметы ПИР, порядка приемки и платежей",
         resp_party="Заказчик / Проектировщик",
         status="Согласовано",
@@ -336,9 +470,9 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     gip_appoint_id = add(
         "Назначение ГИПа и формирование рабочей группы проектировщика",
         "precontract",
-        1,
+        7,
         [contract_phase_id],
-        lag=-1,
+        lag_days=-7,
         note="Приказ о назначении ГИПа, фиксация каналов связи",
         resp_party="Проектировщик",
         status="Завершено",
@@ -346,7 +480,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     curator_appoint_id = add(
         "Запрос и назначение куратора проекта со стороны Заказчика",
         "precontract",
-        1,
+        7,
         [contract_phase_id],
         note="Официальное письмо, регламент совещаний и обмена данными",
         resp_party="Заказчик",
@@ -369,7 +503,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     id_collection_id = add(
         "Запрос и сбор исходных данных Заказчиком (ГПЗУ, ТУ, справки, анализ воды)",
         "survey",
-        3,
+        21,  # 21 календарный день
         [k0_milestone],
         note="Обязанность Заказчика; передача паспортов, техусловий, выписок ЕГРН",
         resp_party="Заказчик",
@@ -383,9 +517,9 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         ots_phase = add(
             "Обследование технического состояния строительных конструкций",
             "survey",
-            3,
+            21,
             [id_collection_id],
-            lag=-1,
+            lag_days=-7,
             note="ГОСТ 31937-2011; выезд на объект, инструментальный контроль, отчет",
             resp_party="Проектировщик",
             status="В работе",
@@ -397,9 +531,9 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         surv_phase = add(
             f"Инженерные изыскания ({types})",
             "survey",
-            6,
+            42,  # 42 календарных дня (~6 недель)
             [id_collection_id],
-            lag=-1,
+            lag_days=-7,
             note="Топосъемка, бурение скважин, лаборатория, согласование с сетями",
             resp_party="Проектировщик",
             status="В работе",
@@ -423,7 +557,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     tx_concept_id = add(
         "Разработка и согласование принципиальной технологии (ТХ) и компоновки",
         "tx_concept",
-        2,
+        14,
         [k1_milestone],
         note="Опросные листы оборудования, технологическая схема, нагрузки для смежников",
         resp_party="Проектировщик / Заказчик",
@@ -432,7 +566,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     pzu_agree_id = add(
         "Предварительное согласование схемы генплана (посадка сооружений и сетей)",
         "tx_concept",
-        2,
+        14,
         [tx_concept_id],
         note="Увязка санитарно-защитных зон, подъездов, точек врезки в сети Заказчика",
         resp_party="Заказчик",
@@ -452,7 +586,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     pd_secs = [s for s in project.sections if s.stage == "П" and s.enabled and s.id != "ots"] if project.has_pd else []
     rd_secs = [s for s in project.sections if s.stage == "Р" and s.enabled] if project.has_rd else []
 
-    def dev_block(items: List[SectionItem], group: str, deps: List[int], lag: int,
+    def dev_block(items: List[SectionItem], group: str, deps: List[int], lag_days: int,
                   durations: Dict[str, int], default_dur: int, waves: List[set],
                   stage_name: str, release_name: str) -> int:
         """Блок разработки: волны разделов + веха выпуска. Возвращает id вехи."""
@@ -464,10 +598,10 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
                 if not w_items:
                     continue
                 d = max(durations.get(s.id, default_dur) for s in w_items)
-                total += d - (2 if prev_exists else 0)
+                total += d - (14 if prev_exists else 0)
                 prev_exists = True
             marks = ", ".join(s.code_mark for s in items)
-            dev = add(stage_name, group, max(total, 2), deps, lag, note=marks)
+            dev = add(stage_name, group, max(total, 14), deps, lag_days, note=marks)
             return add(release_name, group, 0, [dev], milestone=True)
 
         all_ids: List[int] = []
@@ -482,9 +616,9 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             if not w_items:
                 continue
             if prev_ids:
-                w_deps, w_lag = prev_ids, -2 if wave != {"pz"} else -1
+                w_deps, w_lag = prev_ids, -14 if wave != {"pz"} else -7
             else:
-                w_deps, w_lag = deps, lag
+                w_deps, w_lag = deps, lag_days
             ids = []
             for s in w_items:
                 placed.add(s.id)
@@ -495,7 +629,6 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         return add(release_name, group, 0, all_ids, milestone=True)
 
     after_expertise: List[int] = []
-    approval_id: Optional[int] = None
     pd_release: Optional[int] = None
 
     # -----------------------------------------------------------------------
@@ -503,16 +636,16 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     # -----------------------------------------------------------------------
     if pd_secs:
         pd_release = dev_block(
-            pd_secs, "pd", [k2_milestone], 0, PD_DURATION, 4, PD_WAVES,
+            pd_secs, "pd", [k2_milestone], 0, PD_DURATION_DAYS, 28, PD_WAVES,
             "Разработка проектной документации (ПП РФ № 87)", "Выпуск проектной документации",
         )
 
         # 3.1. Согласование с Заказчиком
-        # 5 раб. дней рассмотрение Заказчиком (~1 нед.) + 7 раб. дней устранение замечаний (~1.5 нед.) -> суммарно 2-3 нед.
+        # 5 раб. дней рассмотрение Заказчиком (7 кал. дн.) + 7 раб. дней устранение (10 кал. дн.)
         appr_client_exam = add(
             "Рассмотрение проектных решений Заказчиком (5 раб. дней)",
             "approval",
-            1,
+            7,
             [pd_release],
             note="Проверка комплектности и соответствия ТЗ (план Заказчика: 5 раб. дней)",
             resp_party="Заказчик",
@@ -521,7 +654,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         appr_client_corr = add(
             "Корректировка ПД по замечаниям Заказчика (7 раб. дней)",
             "approval",
-            2,
+            10,
             [appr_client_exam],
             note="Устранение замечаний проектировщиком и повторная передача Заказчику",
             resp_party="Проектировщик",
@@ -540,22 +673,22 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         last = [k3_milestone]
 
         # 3.2. Внутренняя экспертиза «Росводоканал» (РВК)
-        # Регламент: 1-3 (направление, экспертиза, замечания) = 16-18 кал. дн. (~2.5 нед.)
-        # 4 (устранение) = 10 раб. дн. (~2 нед.), 5 (повторная) = 5 раб. дн. (~1 нед.). Общий срок не > 30 кал. дн.
+        # Регламент: 1-3 (направление, экспертиза, замечания) = 14 кал. дн.
+        # 4 (устранение) = 10 кал. дн., 5 (повторная) = 6 кал. дн. Общий срок строго = 30 кал. дн.
         if flags.get("internal_expertise", True):
             rvk_exam = add(
                 "Внутренняя экспертиза РВК (направление, проверка 10 раб. дн., выдача замечаний)",
-                "expertise",
-                2,
+                "internal_rvk",
+                14,
                 last,
-                note="Процедура управления проектированием объектов ГК Росводоканал (3 кал. дн. передача + 10 раб. дн. проверка + 3 кал. дн. замечания)",
+                note="Процедура управления проектированием объектов ГК Росводоканал (3 кал. дн. передача + 10 раб. дн. проверка)",
                 resp_party="Заказчик (РВК)",
                 status="В работе",
             )
             rvk_corr = add(
                 "Устранение замечаний внутренней экспертизы РВК (10 раб. дней)",
-                "expertise",
-                2,
+                "internal_rvk",
+                10,
                 [rvk_exam],
                 note="Корректировка документации проектировщиком в регламентный срок (10 раб. дней)",
                 resp_party="Проектировщик",
@@ -563,16 +696,16 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             )
             rvk_recheck = add(
                 "Повторная проверка внутренней экспертизы РВК и получение заключения (5 раб. дней)",
-                "expertise",
-                1,
+                "internal_rvk",
+                6,
                 [rvk_corr],
-                note="Контрольный суммарный срок внутренней экспертизы РВК не превышает 30 календарных дней",
+                note="Контрольный суммарный срок внутренней экспертизы РВК не превышает 30 календарных дней (14 + 10 + 6 = 30 дн.)",
                 resp_party="Заказчик (РВК)",
                 status="В работе",
             )
             ms_rvk = add(
                 "Контрольная точка: Положительное заключение внутренней экспертизы РВК получено",
-                "expertise",
+                "internal_rvk",
                 0,
                 [rvk_recheck],
                 milestone=True,
@@ -587,7 +720,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             ex_intake = add(
                 "Загрузка в Главгосэкспертизу, проверка комплектности и регистрация (3-5 раб. дней)",
                 "expertise",
-                1,
+                5,
                 last,
                 note="Входной контроль, подписание договора и выставление счета на экспертизу",
                 resp_party="Экспертиза / Проектировщик",
@@ -596,7 +729,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             ex_ii = add(
                 "Экспертиза результатов инженерных изысканий (РИИ)",
                 "expertise",
-                4,
+                30,
                 [ex_intake],
                 note="Проверка отчетов ИГДИ, ИГИ, ИЭИ экспертами",
                 resp_party="Экспертиза",
@@ -605,9 +738,9 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             ex_pd = add(
                 "Экспертиза проектной документации и проверка достоверности сметной стоимости",
                 "expertise",
-                6,
+                42,
                 [ex_ii],
-                lag=-2,
+                lag_days=-14,
                 note="Нормативный срок 42 раб. дня + сметная экспертиза 30 раб. дней (совмещено)",
                 resp_party="Экспертиза",
                 status="В работе",
@@ -615,7 +748,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
             ex_buffer = add(
                 "Устранение замечаний экспертов (дополнительный срок / продление экспертизы)",
                 "expertise",
-                3,
+                21,
                 [ex_pd],
                 note="Реалистичный буфер ГИПа: нормативное продление экспертизы по ст. 49 ГрК РФ",
                 resp_party="Проектировщик / Экспертиза",
@@ -649,13 +782,13 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
 
         rd_waves = [set(s.id for s in rd_secs if s.id != "rd_sm"), {"rd_sm"}]
         rd_release = dev_block(
-            rd_secs, "rd", rd_deps, rd_lag, RD_DURATION, 6, rd_waves,
+            rd_secs, "rd", rd_deps, rd_lag, RD_DURATION_DAYS, 42, rd_waves,
             "Разработка рабочей документации (ГОСТ Р 21.101)", "Выпуск комплектов рабочей документации",
         )
         rd_appr = add(
             "Согласование комплектов рабочей документации и передача в производство работ",
             "approval",
-            2,
+            14,
             [rd_release],
             note="Штамп «В производство работ»",
             resp_party="Заказчик",
@@ -674,41 +807,17 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
         if not pd_secs:
             after_expertise = [k5_milestone]
 
-    # -----------------------------------------------------------------------
-    # Этап 5. Разрешительная документация и завершение
-    # -----------------------------------------------------------------------
     tail = after_expertise or ([rd_release] if rd_release else [k1_milestone])
-    if flags.get("permit", False) and pd_secs:
-        rns_phase = add(
-            "Содействие Заказчику в получении разрешения на строительство (РнС)",
-            "other",
-            3,
-            tail,
-            note="Формирование пакета документов по ст. 51 ГрК РФ",
-            resp_party="Заказчик / Проектировщик",
-            status="В работе",
-        )
-        add(
-            "Контрольная точка К6: Разрешение на строительство получено",
-            "other",
-            0,
-            [rns_phase],
-            milestone=True,
-            note="Право на выполнение строительно-монтажных работ",
-            resp_party="Заказчик",
-            status="В работе",
-        )
-
     if flags.get("techplan"):
         add(
             "Подготовка технического плана здания / сооружения",
             "other",
-            3,
+            21,
             tail,
             note="Кадастровый инженер, постановка на кадастровый учет",
             resp_party="Проектировщик",
             status="В работе",
         )
 
-    resolve_schedule(phases)
+    resolve_schedule(phases, project.start_date)
     return phases
