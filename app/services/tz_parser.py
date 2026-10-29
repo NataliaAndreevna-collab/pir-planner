@@ -1,8 +1,11 @@
 import datetime
 import io
+import os
 import re
 from typing import Dict, List, Optional, Set, Tuple
+from fastapi import HTTPException
 from app.models import FacilityType, ProjectData, ProjectMode, SectionItem
+from app.services.llm_parser import query_llm_tz_analysis
 from app.services.pp87_rules import (
     RD_CATALOG,
     apply_volume_ciphers,
@@ -465,10 +468,29 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         r"(?:рабоч\w+\s+документац|проектн\w+/рабоч\w+|проектн\w+\s+и\s+рабоч\w+|(?<![а-яёa-z0-9])рд(?![а-яёa-z0-9])|рабочи[ех]\s+чертеж|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|марк[аиуе]\s+[а-яё]{2,5}(?![а-яё]))",
         text_lower
     ))
-    mentions_only_pd = bool(re.search(
-        r"(?:только\s+проектн\w+\s+документац|без\s+рабоч\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*пд)",
+    # Точное определение стадии проектирования из заголовков таблицы ТЗ
+    stage_row_match = re.search(
+        r"(?:^|\n)[\|\s0-9\.\-]*\b(?:стади[ияюйн\w]*|вид\s+работ)\s*(?:проектирования)?\b[\t\|:\-– ]*([^\n\r\|]{2,120})",
         text_lower
+    )
+    stage_header_text = stage_row_match.group(1).strip() if stage_row_match else ""
+
+    explicit_both_stages = bool(re.search(
+        r"(?:пд\s*[\+,и\/]\s*рд|п\s*[\+,и\/]\s*р|проектн\w+\s*(?:и|\/)\s*рабоч\w+|две\s+стадии|в\s+2\s+стадии)",
+        stage_header_text or text_lower
     ))
+
+    explicit_only_rd = (not explicit_both_stages) and bool(re.search(
+        r"(?:рабочая\s+документация|\bрд\b|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|только\s+рабоч|без\s+проектн\w+\s+документац|на\s+основании\s+(?:ранее\s+разработанной\s+)?проектной)",
+        stage_header_text if stage_header_text else text_lower
+    ))
+
+    explicit_only_pd = (not explicit_both_stages) and bool(re.search(
+        r"(?:проектная\s+документация|\bпд\b|стади[ияю]\s*[«\"']?п[»\"']?(?:\b|$)|только\s+проектн|без\s+рабоч\w+\s+документац|в\s+одну\s+стадию\s*[\-–:]?\s*пд|рабоч\w+\s+документац\w*\s+не\s+(?:разрабатыва|требу))",
+        stage_header_text if stage_header_text else text_lower
+    ))
+
+    mentions_sm = bool(re.search(r"(?:сметн\w+\s+документац|\bсм\b|\bсср\b|локальн\w+\s+смет|сметы\b)", stage_header_text or text_lower))
 
     explicit_pd: Set[str] = set()
     explicit_rd: Set[str] = set()
@@ -498,18 +520,41 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         text_lower
     ))
 
-    # ПРАВИЛО ДВУСТОРОННЕЙ СВЯЗКИ ПД <-> РД:
-    # 1) Если найдены марки/дисциплины РД -> автоматически добавляем аналогичные разделы в ПД
-    if explicit_rd and not (single_pd_hint and explicit_pd):
-        explicit_pd |= map_rd_to_pd_ids(explicit_rd, facility_type)
+    if explicit_only_rd:
+        has_pd = False
+        has_rd = True
+        explicit_pd = set()
+    elif explicit_only_pd:
+        has_pd = True
+        has_rd = False
+        explicit_rd = set()
+    elif explicit_both_stages:
+        has_pd = True
+        has_rd = True
+        if explicit_rd and not (single_pd_hint and explicit_pd):
+            explicit_pd |= map_rd_to_pd_ids(explicit_rd, facility_type)
+        if explicit_pd and not (single_rd_hint and explicit_rd):
+            explicit_rd |= map_pd_to_rd_ids(explicit_pd, text_lower)
+    else:
+        # ПРАВИЛО ДВУСТОРОННЕЙ СВЯЗКИ ПД <-> РД:
+        # 1) Если найдены марки/дисциплины РД -> автоматически добавляем аналогичные разделы в ПД
+        if explicit_rd and not (single_pd_hint and explicit_pd):
+            explicit_pd |= map_rd_to_pd_ids(explicit_rd, facility_type)
 
-    # 2) Если найдены разделы/дисциплины ПД -> автоматически формируем аналогичные марки в РД
-    if explicit_pd and not (single_rd_hint and explicit_rd):
-        explicit_rd |= map_pd_to_rd_ids(explicit_pd, text_lower)
+        # 2) Если найдены разделы/дисциплины ПД -> автоматически формируем аналогичные марки в РД
+        if explicit_pd and not (single_rd_hint and explicit_rd):
+            explicit_rd |= map_pd_to_rd_ids(explicit_pd, text_lower)
 
-    has_pd = True
-    # Включаем РД, если она упомянута явно ИЛИ если в ТЗ перечислены инженерные разделы/марки (и нет запрета «только ПД»)
-    has_rd = (mentions_rd or bool(explicit_rd)) and not mentions_only_pd
+        has_pd = True
+        # Включаем РД, если она упомянута явно ИЛИ если в ТЗ перечислены инженерные разделы/марки
+        has_rd = bool(mentions_rd or explicit_rd)
+
+    # Если сметы (СМ) выделены отдельно в графе стадийности/состава:
+    if mentions_sm:
+        if has_pd:
+            explicit_pd.add("sm")
+        if has_rd:
+            explicit_rd.add("rd_sm")
 
     demands_full_pp87 = bool(re.search(
         r"(?:состав\s+разделов\s+принять\s+согласно\s+постановлени\w*[^\n]{0,50}№\s*87|в\s+полном\s+объеме[^\n]{0,40}№\s*87)",
@@ -729,9 +774,9 @@ def apply_tz_to_sections(
         "ots": ots_enabled,
         "surveys": has_surveys,
         "survey_types": "ИГДИ, ИГИ, ИЭИ",
-        "internal_expertise": has_internal_exp,
-        "expertise": (chosen_preset == "expertise") or (chosen_preset == "tz" and has_state_exp),
-        "permit": has_permit or (chosen_preset == "permit"),
+        "internal_expertise": True,  # Включаем этапы внутренней экспертизы РВК в график по умолчанию
+        "expertise": True,           # Включаем этапы Главгосэкспертизы и смет в график по умолчанию
+        "permit": False,             # Разрешение на строительство убрано по требованию ГИПа
         "techplan": has_techplan,
     }
 
@@ -739,10 +784,13 @@ def apply_tz_to_sections(
     return all_sections, has_pd, has_rd, chosen_preset, detected_features, schedule_flags
 
 
-def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
+def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData, List[str]]:
     """
     Анализирует текст ТЗ, извлекает параметры объекта,
     определяет тип объекта, стадии и наиболее подходящий вариант состава разделов ПД/РД.
+    Параметр engine:
+      - 'local': мгновенный нормативный расчет по ключевым маркерам и словарям (<0.05 сек).
+      - 'ai': анализ через нейросеть (OpenRouter LLM) с подробными пояснениями.
     """
     object_name = "Строительство объекта"
     match_obj = re.search(
@@ -812,18 +860,95 @@ def parse_tz_content(raw_text: str) -> Tuple[ProjectData, List[str]]:
     has_capital_markers = any(k in text_lower for k in capital_keywords)
 
     detected_features: List[str] = []
-    if has_capital_markers and has_linear_markers:
-        facility_type = FacilityType.CAPITAL
-        detected_features.append("Комплексный объект: площадочные сооружения + прилегающие сети")
-    elif has_linear_markers and not has_capital_markers:
-        facility_type = FacilityType.LINEAR
-        detected_features.append("Линейный объект (Раздел III ПП РФ № 87)")
-    else:
-        facility_type = FacilityType.CAPITAL
-        detected_features.append("Объект капитального строительства (Раздел II ПП РФ № 87)")
 
-    sections, has_pd, has_rd, chosen_preset, sec_features, schedule_flags = apply_tz_to_sections(raw_text, facility_type)
-    detected_features.extend(sec_features)
+    llm_result = None
+    if engine == "ai":
+        llm_result, llm_error = query_llm_tz_analysis(raw_text)
+        if not llm_result:
+            # Пользователь специально нажал AI, поэтому не подменяем молча на внутренний расчет,
+            # а сообщаем точную причину ошибки!
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ошибка нейросети: {llm_error or 'Нейросеть не вернула результат'}. Проверьте соединение или используйте кнопку 'Быстрый анализ (без AI)'."
+            )
+        detected_features.append("Успешно применены выводы нейросети (AI)")
+        if llm_result.get("explanation"):
+            detected_features.append(f"AI пояснение: {llm_result['explanation']}")
+
+        if llm_result.get("object_name") and len(llm_result["object_name"].strip()) > 3:
+            object_name = llm_result["object_name"].strip()
+        if llm_result.get("customer"):
+            customer = clean_extracted_entity(llm_result["customer"])
+        if llm_result.get("contractor"):
+            contractor = clean_extracted_entity(llm_result["contractor"])
+        if llm_result.get("contract_number"):
+            contract_number = llm_result["contract_number"].strip()
+        if llm_result.get("contract_date"):
+            contract_date = llm_result["contract_date"].strip()
+
+        fac_str = str(llm_result.get("facility_type", "")).lower()
+        if fac_str == "linear":
+            facility_type = FacilityType.LINEAR
+            detected_features.append("Линейный объект (Раздел III ПП РФ № 87)")
+        else:
+            facility_type = FacilityType.CAPITAL
+            detected_features.append("Объект капитального строительства (Раздел II ПП РФ № 87)")
+
+        has_pd = bool(llm_result.get("has_pd", True))
+        has_rd = bool(llm_result.get("has_rd", False))
+        chosen_preset = llm_result.get("composition_preset", "tz")
+        if chosen_preset not in ("tz", "permit", "expertise"):
+            chosen_preset = "tz" if (has_rd and not has_pd) else "permit"
+
+        pd_sec_ids = set(llm_result.get("pd_sections", [])) if has_pd else set()
+        rd_mark_ids = set(llm_result.get("rd_marks", [])) if has_rd else set()
+
+        if facility_type == FacilityType.LINEAR:
+            pd_sections = get_default_linear_sections()
+        else:
+            pd_sections = get_default_capital_sections()
+
+        for s in pd_sections:
+            if has_pd and s.id in pd_sec_ids:
+                s.enabled = True
+                s.source = "tz"
+            else:
+                s.enabled = False
+                s.source = "default"
+
+        rd_sections = build_rd_sections(facility_type, pd_sections, text_lower)
+        for r in rd_sections:
+            if has_rd and r.id in rd_mark_ids:
+                r.enabled = True
+                r.source = "tz"
+            else:
+                r.enabled = False
+                r.source = "default"
+
+        schedule_flags = {
+            "ots": any(s.id == "ots" and s.enabled for s in pd_sections),
+            "surveys": bool(llm_result.get("has_surveys", False)),
+            "survey_types": "ИГДИ, ИГИ, ИЭИ",
+            "internal_expertise": True,
+            "expertise": True,
+            "permit": False,
+            "techplan": False,
+        }
+        sections = pd_sections + rd_sections
+    else:
+        # 2. Резервный режим (fallback): классический парсер по правилам и словарям
+        if has_capital_markers and has_linear_markers:
+            facility_type = FacilityType.CAPITAL
+            detected_features.append("Комплексный объект: площадочные сооружения + прилегающие сети")
+        elif has_linear_markers and not has_capital_markers:
+            facility_type = FacilityType.LINEAR
+            detected_features.append("Линейный объект (Раздел III ПП РФ № 87)")
+        else:
+            facility_type = FacilityType.CAPITAL
+            detected_features.append("Объект капитального строительства (Раздел II ПП РФ № 87)")
+
+        sections, has_pd, has_rd, chosen_preset, sec_features, schedule_flags = apply_tz_to_sections(raw_text, facility_type)
+        detected_features.extend(sec_features)
 
     project_mode = ProjectMode.PRE_CONTRACT
     cipher = compute_cipher_from_contract(contract_number, contract_date) if contract_number else ""

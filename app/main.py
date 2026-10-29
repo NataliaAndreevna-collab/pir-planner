@@ -50,10 +50,12 @@ def read_root():
 @app.post("/api/parse-tz", response_model=ParseTZResponse)
 async def parse_tz_endpoint(
     text: str = Form(default=""),
-    file: UploadFile = File(default=None)
+    file: UploadFile = File(default=None),
+    engine: str = Form(default="local"),
 ):
     """
     Парсит ТЗ из загруженного файла (.docx, .pdf, .txt) или переданного текста.
+    Параметр engine: 'local' (мгновенный по нормативам) или 'ai' (нейросеть).
     Возвращает предварительно заполненные параметры проекта и состав разделов.
     """
     raw_text = text
@@ -73,7 +75,7 @@ async def parse_tz_endpoint(
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Не передан текст или файл ТЗ для анализа")
 
-    project_data, detected_features = parse_tz_content(raw_text)
+    project_data, detected_features = parse_tz_content(raw_text, engine=engine)
     return ParseTZResponse(project_data=project_data, detected_features=detected_features)
 
 

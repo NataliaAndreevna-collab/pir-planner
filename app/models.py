@@ -74,13 +74,24 @@ class SectionItem(BaseModel):
 class SchedulePhase(BaseModel):
     id: int
     name: str
-    group: str = "pd"                # survey | pd | approval | expertise | rd | other
+    group: str = "pd"                # precontract | survey | tx_concept | pd | approval | expertise | rd | other
     start_week: int = 1              # Неделя начала (1..N) - для этапов без зависимостей задается вручную
     duration_weeks: int = 4          # Длительность в неделях (0 - веха)
     depends_on: List[int] = Field(default_factory=list)  # id этапов-предшественников (начало после их окончания)
     lag_weeks: int = 0               # Сдвиг относительно окончания предшественников (может быть < 0 - нахлест)
     milestone: bool = False          # Веха (контрольная точка)
     note: str = ""
+    status: str = "В работе"         # "В работе", "На согласовании", "Согласовано", "Замечания", "Завершено"
+    resp_party: str = "Проектировщик" # "Проектировщик", "Заказчик", "Экспертиза", "Подрядчик"
+    enabled: bool = True             # Флаг включения этапа в график (пользователь может отключить ненужные)
+
+    # Поля фиксации документооборота и согласований с Заказчиком:
+    sent_to_client_date: str = ""    # Дата отправки Заказчику (например, "2026-09-24")
+    client_remarks_1_date: str = ""  # Замечания 1 от Заказчика
+    designer_answers_1_date: str = "" # Ответы 1 / снятие замечаний проектировщиком
+    client_remarks_2_date: str = ""  # Повторные замечания 2
+    designer_answers_2_date: str = "" # Финальные ответы 2 / протокол согласования
+    approval_result: str = ""        # Результат: "Согласовано без замечаний", "Замечания сняты", "В рассмотрении Заказчиком"
 
 
 class ProjectData(BaseModel):

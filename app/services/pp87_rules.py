@@ -217,22 +217,26 @@ def build_rd_sections(facility: FacilityType, pd_sections: List[SectionItem], te
 # ---------------------------------------------------------------------------
 
 GROUPS: Dict[str, str] = {
-    "survey": "Обследование и изыскания",
-    "pd": "Проектная документация",
-    "approval": "Согласования",
-    "expertise": "Экспертиза",
-    "rd": "Рабочая документация",
-    "other": "Прочие работы",
+    "precontract": "Организационно-договорной этап",
+    "survey": "Сбор ИД и инженерные изыскания",
+    "tx_concept": "Согласование технологии и концепции",
+    "pd": "Проектная документация (стадия ПД)",
+    "approval": "Согласование проектных решений",
+    "expertise": "Государственная / негосударственная экспертиза",
+    "rd": "Рабочая документация (стадия РД)",
+    "other": "Разрешение на строительство и ввод",
 }
 
 # Цвета групп (hex без #) - используются в Excel и в интерфейсе
 GROUP_COLORS: Dict[str, str] = {
-    "survey": "8E7CC3",
-    "pd": "2F75B5",
-    "approval": "ED7D31",
-    "expertise": "C0504D",
-    "rd": "70AD47",
-    "other": "7F7F7F",
+    "precontract": "475569", # Тёмно-серый / сланец (Договор)
+    "survey": "10B981",      # Изумрудный (Изыскания)
+    "tx_concept": "F97316",  # Оранжевый (Технология)
+    "pd": "2563EB",          # Синий (ПД)
+    "approval": "D97706",    # Янтарный (Согласования)
+    "expertise": "9333EA",   # Пурпурный (Экспертиза)
+    "rd": "0D9488",          # Бирюзовый (РД)
+    "other": "64748B",       # Серо-голубой (Прочее / РнС)
 }
 
 # Типовые длительности разработки разделов ПД, недель
@@ -271,7 +275,9 @@ def resolve_schedule(phases: List[SchedulePhase]) -> None:
     for _ in range(len(phases) + 2):
         changed = False
         for p in phases:
-            deps = [by_id[d] for d in p.depends_on if d in by_id and d != p.id]
+            if not getattr(p, "enabled", True):
+                continue
+            deps = [by_id[d] for d in p.depends_on if d in by_id and d != p.id and getattr(by_id[d], "enabled", True)]
             if deps:
                 base = max(phase_end_excl(d) for d in deps) + p.lag_weeks
                 if p.milestone:
@@ -290,41 +296,161 @@ def resolve_schedule(phases: List[SchedulePhase]) -> None:
 
 
 def total_weeks(phases: List[SchedulePhase]) -> int:
-    return max((phase_end_excl(p) - 1 for p in phases), default=0)
+    enabled_phases = [p for p in phases if getattr(p, "enabled", True)]
+    return max((phase_end_excl(p) - 1 for p in enabled_phases), default=0)
 
 
 def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[SchedulePhase]:
     """
     Строит календарный график по составу проекта и признакам ТЗ.
     detail = "sections" - по разделам/маркам, "stages" - укрупненно по стадиям.
+    Учитывает преддоговорной этап (Этап 0), передачу ИД Заказчиком (Этап 1),
+    согласование технологии/концепции, экспертизу и вехи К0-К6.
     """
     detail = detail or project.schedule_detail or "sections"
     flags = project.schedule_flags or {}
     phases: List[SchedulePhase] = []
     counter = [0]
 
-    def add(name, group, dur, deps=None, lag=0, milestone=False, note="") -> int:
+    def add(name, group, dur, deps=None, lag=0, milestone=False, note="", resp_party="Проектировщик", status="В работе", enabled=True) -> int:
         counter[0] += 1
         phases.append(SchedulePhase(
             id=counter[0], name=name, group=group, start_week=1,
             duration_weeks=0 if milestone else max(1, int(dur)),
             depends_on=list(deps or []), lag_weeks=lag, milestone=milestone, note=note,
+            resp_party=resp_party, status=status, enabled=enabled,
         ))
         return counter[0]
 
+    # -----------------------------------------------------------------------
+    # Этап 0. Организационно-договорной этап (Pre-Contract)
+    # -----------------------------------------------------------------------
+    contract_phase_id = add(
+        "Согласование существенных условий, заключение договора на ПИР",
+        "precontract",
+        2,  # 2 недели (~10-14 дней)
+        note="Согласование сметы ПИР, порядка приемки и платежей",
+        resp_party="Заказчик / Проектировщик",
+        status="Согласовано",
+    )
+    gip_appoint_id = add(
+        "Назначение ГИПа и формирование рабочей группы проектировщика",
+        "precontract",
+        1,
+        [contract_phase_id],
+        lag=-1,
+        note="Приказ о назначении ГИПа, фиксация каналов связи",
+        resp_party="Проектировщик",
+        status="Завершено",
+    )
+    curator_appoint_id = add(
+        "Запрос и назначение куратора проекта со стороны Заказчика",
+        "precontract",
+        1,
+        [contract_phase_id],
+        note="Официальное письмо, регламент совещаний и обмена данными",
+        resp_party="Заказчик",
+        status="Завершено",
+    )
+    k0_milestone = add(
+        "Контрольная точка К0: Договор подписан, ГИП и куратор закреплены",
+        "precontract",
+        0,
+        [gip_appoint_id, curator_appoint_id],
+        milestone=True,
+        note="Юридический старт проекта",
+        resp_party="Заказчик / Проектировщик",
+        status="Завершено",
+    )
+
+    # -----------------------------------------------------------------------
+    # Этап 1. Сбор исходных данных (ИД) и обследование
+    # -----------------------------------------------------------------------
+    id_collection_id = add(
+        "Запрос и сбор исходных данных Заказчиком (ГПЗУ, ТУ, справки, анализ воды)",
+        "survey",
+        3,
+        [k0_milestone],
+        note="Обязанность Заказчика; передача паспортов, техусловий, выписок ЕГРН",
+        resp_party="Заказчик",
+        status="В работе",
+    )
+
+    ots_on = any(s.id == "ots" and s.enabled for s in project.sections if s.stage == "П") or flags.get("ots")
+    surveys_phases: List[int] = [id_collection_id]
+
+    if ots_on:
+        ots_phase = add(
+            "Обследование технического состояния строительных конструкций",
+            "survey",
+            3,
+            [id_collection_id],
+            lag=-1,
+            note="ГОСТ 31937-2011; выезд на объект, инструментальный контроль, отчет",
+            resp_party="Проектировщик",
+            status="В работе",
+        )
+        surveys_phases.append(ots_phase)
+
+    if flags.get("surveys", True):
+        types = flags.get("survey_types") or "ИГДИ, ИГИ, ИЭИ"
+        surv_phase = add(
+            f"Инженерные изыскания ({types})",
+            "survey",
+            6,
+            [id_collection_id],
+            lag=-1,
+            note="Топосъемка, бурение скважин, лаборатория, согласование с сетями",
+            resp_party="Проектировщик",
+            status="В работе",
+        )
+        surveys_phases.append(surv_phase)
+
+    k1_milestone = add(
+        "Контрольная точка К1: Полный комплект исходных данных и отчетов передан ГИПу",
+        "survey",
+        0,
+        surveys_phases,
+        milestone=True,
+        note="Разрешение на старт полномасштабного проектирования",
+        resp_party="Заказчик",
+        status="В работе",
+    )
+
+    # -----------------------------------------------------------------------
+    # Этап 2. Согласование концепции технологии и генерального плана
+    # -----------------------------------------------------------------------
+    tx_concept_id = add(
+        "Разработка и согласование принципиальной технологии (ТХ) и компоновки",
+        "tx_concept",
+        2,
+        [k1_milestone],
+        note="Опросные листы оборудования, технологическая схема, нагрузки для смежников",
+        resp_party="Проектировщик / Заказчик",
+        status="В работе",
+    )
+    pzu_agree_id = add(
+        "Предварительное согласование схемы генплана (посадка сооружений и сетей)",
+        "tx_concept",
+        2,
+        [tx_concept_id],
+        note="Увязка санитарно-защитных зон, подъездов, точек врезки в сети Заказчика",
+        resp_party="Заказчик",
+        status="В работе",
+    )
+    k2_milestone = add(
+        "Контрольная точка К2: Технологическая схема и генеральный план утверждены",
+        "tx_concept",
+        0,
+        [pzu_agree_id],
+        milestone=True,
+        note="Фиксация габаритов, весов и мощностей для смежных отделов",
+        resp_party="Заказчик / Проектировщик",
+        status="В работе",
+    )
+
     pd_secs = [s for s in project.sections if s.stage == "П" and s.enabled and s.id != "ots"] if project.has_pd else []
     rd_secs = [s for s in project.sections if s.stage == "Р" and s.enabled] if project.has_rd else []
-    ots_on = any(s.id == "ots" and s.enabled for s in project.sections if s.stage == "П") or flags.get("ots")
-
-    # 1. Обследование и изыскания
-    pre: List[int] = []
-    if ots_on:
-        pre.append(add("Обследование технического состояния, отчет", "survey", 4,
-                       note="ГОСТ 31937; согласование отчета с Заказчиком"))
-    if flags.get("surveys"):
-        types = flags.get("survey_types") or "ИГДИ, ИГИ, ИЭИ"
-        pre.append(add(f"Инженерные изыскания ({types})", "survey", 8,
-                       note="Полевые работы, камеральная обработка, технические отчеты"))
 
     def dev_block(items: List[SectionItem], group: str, deps: List[int], lag: int,
                   durations: Dict[str, int], default_dur: int, waves: List[set],
@@ -372,51 +498,217 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
     approval_id: Optional[int] = None
     pd_release: Optional[int] = None
 
-    # 2. Проектная документация
+    # -----------------------------------------------------------------------
+    # Этап 3. Разработка проектной документации (стадия ПД)
+    # -----------------------------------------------------------------------
     if pd_secs:
         pd_release = dev_block(
-            pd_secs, "pd", pre, -4 if flags.get("surveys") else 0, PD_DURATION, 4, PD_WAVES,
-            "Разработка проектной документации", "Выпуск проектной документации",
+            pd_secs, "pd", [k2_milestone], 0, PD_DURATION, 4, PD_WAVES,
+            "Разработка проектной документации (ПП РФ № 87)", "Выпуск проектной документации",
         )
-        approval_id = add("Согласование проектных решений с Заказчиком и эксплуатирующими организациями",
-                          "approval", 4, [pd_release], note="Сетевые организации, балансодержатели")
-        last = [approval_id]
-        if flags.get("internal_expertise"):
-            ie = add("Внутренняя экспертиза Заказчика, устранение замечаний", "expertise", 5, last,
-                     note="Регламент 30 календарных дней")
-            last = [ie]
+
+        # 3.1. Согласование с Заказчиком
+        # 5 раб. дней рассмотрение Заказчиком (~1 нед.) + 7 раб. дней устранение замечаний (~1.5 нед.) -> суммарно 2-3 нед.
+        appr_client_exam = add(
+            "Рассмотрение проектных решений Заказчиком (5 раб. дней)",
+            "approval",
+            1,
+            [pd_release],
+            note="Проверка комплектности и соответствия ТЗ (план Заказчика: 5 раб. дней)",
+            resp_party="Заказчик",
+            status="На согласовании",
+        )
+        appr_client_corr = add(
+            "Корректировка ПД по замечаниям Заказчика (7 раб. дней)",
+            "approval",
+            2,
+            [appr_client_exam],
+            note="Устранение замечаний проектировщиком и повторная передача Заказчику",
+            resp_party="Проектировщик",
+            status="В работе",
+        )
+        k3_milestone = add(
+            "Контрольная точка К3: Проектная документация согласована Заказчиком",
+            "approval",
+            0,
+            [appr_client_corr],
+            milestone=True,
+            note="Подписание протокола согласования проектных решений с Заказчиком",
+            resp_party="Заказчик / Проектировщик",
+            status="В работе",
+        )
+        last = [k3_milestone]
+
+        # 3.2. Внутренняя экспертиза «Росводоканал» (РВК)
+        # Регламент: 1-3 (направление, экспертиза, замечания) = 16-18 кал. дн. (~2.5 нед.)
+        # 4 (устранение) = 10 раб. дн. (~2 нед.), 5 (повторная) = 5 раб. дн. (~1 нед.). Общий срок не > 30 кал. дн.
+        if flags.get("internal_expertise", True):
+            rvk_exam = add(
+                "Внутренняя экспертиза РВК (направление, проверка 10 раб. дн., выдача замечаний)",
+                "expertise",
+                2,
+                last,
+                note="Процедура управления проектированием объектов ГК Росводоканал (3 кал. дн. передача + 10 раб. дн. проверка + 3 кал. дн. замечания)",
+                resp_party="Заказчик (РВК)",
+                status="В работе",
+            )
+            rvk_corr = add(
+                "Устранение замечаний внутренней экспертизы РВК (10 раб. дней)",
+                "expertise",
+                2,
+                [rvk_exam],
+                note="Корректировка документации проектировщиком в регламентный срок (10 раб. дней)",
+                resp_party="Проектировщик",
+                status="В работе",
+            )
+            rvk_recheck = add(
+                "Повторная проверка внутренней экспертизы РВК и получение заключения (5 раб. дней)",
+                "expertise",
+                1,
+                [rvk_corr],
+                note="Контрольный суммарный срок внутренней экспертизы РВК не превышает 30 календарных дней",
+                resp_party="Заказчик (РВК)",
+                status="В работе",
+            )
+            ms_rvk = add(
+                "Контрольная точка: Положительное заключение внутренней экспертизы РВК получено",
+                "expertise",
+                0,
+                [rvk_recheck],
+                milestone=True,
+                note="Официальное согласование РВК для передачи в госэкспертизу или в производство",
+                resp_party="Заказчик (РВК)",
+                status="В работе",
+            )
+            last = [ms_rvk]
+
+        # 3.3. Государственная / негосударственная экспертиза (ПД + ИИ + Достоверность смет)
         if flags.get("expertise", True):
-            ex = add("Государственная / негосударственная экспертиза (в т.ч. достоверность сметной стоимости)",
-                     "expertise", 9, last, note="42 раб. дня + устранение замечаний")
-            ms = add("Положительное заключение экспертизы", "expertise", 0, [ex], milestone=True)
-            last = [ms]
+            ex_intake = add(
+                "Загрузка в Главгосэкспертизу, проверка комплектности и регистрация (3-5 раб. дней)",
+                "expertise",
+                1,
+                last,
+                note="Входной контроль, подписание договора и выставление счета на экспертизу",
+                resp_party="Экспертиза / Проектировщик",
+                status="В работе",
+            )
+            ex_ii = add(
+                "Экспертиза результатов инженерных изысканий (РИИ)",
+                "expertise",
+                4,
+                [ex_intake],
+                note="Проверка отчетов ИГДИ, ИГИ, ИЭИ экспертами",
+                resp_party="Экспертиза",
+                status="В работе",
+            )
+            ex_pd = add(
+                "Экспертиза проектной документации и проверка достоверности сметной стоимости",
+                "expertise",
+                6,
+                [ex_ii],
+                lag=-2,
+                note="Нормативный срок 42 раб. дня + сметная экспертиза 30 раб. дней (совмещено)",
+                resp_party="Экспертиза",
+                status="В работе",
+            )
+            ex_buffer = add(
+                "Устранение замечаний экспертов (дополнительный срок / продление экспертизы)",
+                "expertise",
+                3,
+                [ex_pd],
+                note="Реалистичный буфер ГИПа: нормативное продление экспертизы по ст. 49 ГрК РФ",
+                resp_party="Проектировщик / Экспертиза",
+                status="В работе",
+            )
+            ms_exp = add(
+                "Контрольная точка К4: Положительное заключение государственной / негос. экспертизы получено",
+                "expertise",
+                0,
+                [ex_buffer],
+                milestone=True,
+                note="Регистрация положительного заключения в ЕГРЗ Минстроя РФ",
+                resp_party="Экспертиза",
+                status="В работе",
+            )
+            last = [ms_exp]
+
         after_expertise = last
 
-    # 3. Рабочая документация (после согласования ПД, параллельно экспертизе)
+    # -----------------------------------------------------------------------
+    # Этап 4. Рабочая документация (стадия РД)
+    # -----------------------------------------------------------------------
     rd_release: Optional[int] = None
     if rd_secs:
-        if approval_id:
-            rd_deps, rd_lag = [approval_id], 0
-        elif pre:
-            rd_deps, rd_lag = pre, -2
+        if last:
+            rd_deps, rd_lag = last, 0
+        elif k1_milestone:
+            rd_deps, rd_lag = [k1_milestone], 0
         else:
             rd_deps, rd_lag = [], 0
+
         rd_waves = [set(s.id for s in rd_secs if s.id != "rd_sm"), {"rd_sm"}]
         rd_release = dev_block(
             rd_secs, "rd", rd_deps, rd_lag, RD_DURATION, 6, rd_waves,
-            "Разработка рабочей документации", "Выпуск рабочей документации",
+            "Разработка рабочей документации (ГОСТ Р 21.101)", "Выпуск комплектов рабочей документации",
+        )
+        rd_appr = add(
+            "Согласование комплектов рабочей документации и передача в производство работ",
+            "approval",
+            2,
+            [rd_release],
+            note="Штамп «В производство работ»",
+            resp_party="Заказчик",
+            status="В работе",
+        )
+        k5_milestone = add(
+            "Контрольная точка К5: Рабочая документация утверждена и передана на объект",
+            "rd",
+            0,
+            [rd_appr],
+            milestone=True,
+            note="Готовность к СМР",
+            resp_party="Заказчик / Проектировщик",
+            status="В работе",
         )
         if not pd_secs:
-            rd_appr = add("Согласование рабочей документации с Заказчиком и эксплуатирующими организациями",
-                          "approval", 3, [rd_release])
-            after_expertise = [rd_appr]
+            after_expertise = [k5_milestone]
 
-    # 4. Завершающие работы
-    tail = after_expertise or ([rd_release] if rd_release else pre)
-    if flags.get("permit") and pd_secs:
-        add("Содействие в получении разрешения на строительство", "other", 4, tail)
+    # -----------------------------------------------------------------------
+    # Этап 5. Разрешительная документация и завершение
+    # -----------------------------------------------------------------------
+    tail = after_expertise or ([rd_release] if rd_release else [k1_milestone])
+    if flags.get("permit", False) and pd_secs:
+        rns_phase = add(
+            "Содействие Заказчику в получении разрешения на строительство (РнС)",
+            "other",
+            3,
+            tail,
+            note="Формирование пакета документов по ст. 51 ГрК РФ",
+            resp_party="Заказчик / Проектировщик",
+            status="В работе",
+        )
+        add(
+            "Контрольная точка К6: Разрешение на строительство получено",
+            "other",
+            0,
+            [rns_phase],
+            milestone=True,
+            note="Право на выполнение строительно-монтажных работ",
+            resp_party="Заказчик",
+            status="В работе",
+        )
+
     if flags.get("techplan"):
-        add("Подготовка технического плана", "other", 4, tail)
+        add(
+            "Подготовка технического плана здания / сооружения",
+            "other",
+            3,
+            tail,
+            note="Кадастровый инженер, постановка на кадастровый учет",
+            resp_party="Проектировщик",
+            status="В работе",
+        )
 
     resolve_schedule(phases)
     return phases
