@@ -3,6 +3,7 @@ import io
 import os
 import re
 from typing import Dict, List, Optional, Set, Tuple
+from fastapi import HTTPException
 from app.models import FacilityType, ProjectData, ProjectMode, SectionItem
 from app.services.llm_parser import query_llm_tz_analysis
 from app.services.pp87_rules import (
@@ -862,14 +863,14 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
 
     llm_result = None
     if engine == "ai":
-        detected_features.append("Запущен анализ ТЗ через нейросеть (AI)")
-        llm_result = query_llm_tz_analysis(raw_text)
+        llm_result, llm_error = query_llm_tz_analysis(raw_text)
         if not llm_result:
-            detected_features.append("Внимание: Нейросеть (AI) не ответила вовремя или недоступна. Выполнен расчет по нормативным правилам.")
-    else:
-        detected_features.append("Использован быстрый нормативный алгоритм (без AI)")
-
-    if llm_result:
+            # Пользователь специально нажал AI, поэтому не подменяем молча на внутренний расчет,
+            # а сообщаем точную причину ошибки!
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ошибка нейросети: {llm_error or 'Нейросеть не вернула результат'}. Проверьте соединение или используйте кнопку 'Быстрый анализ (без AI)'."
+            )
         detected_features.append("Успешно применены выводы нейросети (AI)")
         if llm_result.get("explanation"):
             detected_features.append(f"AI пояснение: {llm_result['explanation']}")

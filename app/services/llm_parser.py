@@ -7,12 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Список поддерживаемых моделей (в порядке приоритета).
-# Если одна модель временно перегружена (429/503), автоматически пробуется следующая.
+# Список поддерживаемых надежных моделей (в порядке приоритета).
+# Google Gemini 2.5 Flash и OpenAI GPT-4o-mini работают мгновенно (2-4 сек) и возвращают идеальный JSON.
 DEFAULT_MODELS = [
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "google/gemma-4-31b-it:free",
-    "liquid/lfm-2.5-2.6b:free",
+    "google/gemini-2.5-flash",
+    "openai/gpt-4o-mini",
+    "deepseek/deepseek-chat",
+    "qwen/qwen-2.5-72b-instruct",
 ]
 
 # Промпт для строгого извлечения структуры из ТЗ
@@ -143,16 +144,16 @@ def clean_json_response(raw_text: str) -> str:
     return t
 
 
-def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Отправляет текст ТЗ в нейросеть через OpenRouter API.
-    Возвращает распарсенный словарь или None при ошибке/отсутствии ключа.
+    Возвращает кортеж: (parsed_json_dict, error_message).
+    Если произошла ошибка, error_message содержит подробное описание с кодом ошибки и названием модели.
     """
     api_key = get_api_key()
     if not api_key:
-        return None
+        return None, "В конфигурации (.env) не найден OPENROUTER_API_KEY."
 
-    # Ограничиваем объем входного текста для надежности и скорости (до 25 000 символов)
     cleaned_tz = tz_text.strip()
     if len(cleaned_tz) > 25000:
         cleaned_tz = cleaned_tz[:25000] + "\n\n[... Текст сокращен для анализа ...]"
@@ -160,6 +161,7 @@ def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Opt
     user_message = f"Текст Технического задания (ТЗ):\n\n{cleaned_tz}\n\nСформируй JSON строго по инструкции."
 
     models_to_try = [model_name] if model_name else DEFAULT_MODELS
+    last_error = ""
 
     for m in models_to_try:
         if not m:
@@ -172,7 +174,7 @@ def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Opt
                     {"role": "user", "content": user_message},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 1200,
+                "max_tokens": 1500,
             }
 
             req = urllib.request.Request(
@@ -186,24 +188,31 @@ def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Opt
                 data=json.dumps(req_data).encode("utf-8"),
             )
 
-            with urllib.request.urlopen(req, timeout=35) as resp:
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 resp_bytes = resp.read()
                 resp_json = json.loads(resp_bytes.decode("utf-8"))
                 choices = resp_json.get("choices", [])
                 if not choices:
+                    err_info = resp_json.get("error", {})
+                    last_error = f"Модель {m}: {err_info.get('message', 'пустой ответ')}"
                     continue
                 content = choices[0].get("message", {}).get("content", "")
                 if not content:
+                    last_error = f"Модель {m} вернула пустой контент."
                     continue
 
                 cleaned_json = clean_json_response(content)
                 parsed = json.loads(cleaned_json)
                 if isinstance(parsed, dict) and ("has_pd" in parsed or "has_rd" in parsed):
-                    return parsed
+                    return parsed, None
+                else:
+                    last_error = f"Модель {m} вернула некорректный JSON."
         except urllib.error.HTTPError as he:
-            # Если превышен лимит (429) или сервис недоступен, пробуем следующую модель
+            err_body = he.read().decode("utf-8", errors="ignore")
+            last_error = f"Ошибка OpenRouter HTTP {he.code} ({m}): {err_body[:200]}"
             continue
-        except Exception:
+        except Exception as e:
+            last_error = f"Ошибка запроса к {m}: {str(e)}"
             continue
 
-    return None
+    return None, last_error
