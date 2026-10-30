@@ -281,9 +281,11 @@ def test_additional_works_have_no_hidden_default_cost(tec1_cost):
     tec1_cost.schedule_flags = {"surveys": True}
     works = build_default_additional_works(tec1_cost)
     assert all(w.cost_net_rub == 0 for w in works)
+    assert all(w.enabled is False for w in works)  # ничего не включается автоматически
 
     cp = tec1_cost.cost_parameters
     cp.additional_works = works
+    cp.additional_works[1].enabled = True  # пользователь включил изыскания, сумму не ввёл
     recalculate_cost_parameters(cp, has_pd=tec1_cost.has_pd, has_rd=tec1_cost.has_rd)
     assert cp.additional_works_total_net_rub == 0
     assert cp.total_cost_net_rub == 0

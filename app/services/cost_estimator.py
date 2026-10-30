@@ -655,7 +655,6 @@ def build_default_additional_works(project_data: ProjectData) -> List[Additional
     Суммы по умолчанию НЕ задаются (0 ₽): стоимость вводит специалист. Раньше здесь были зашитые
     суммы, которые молча попадали в итог при включении изысканий.
     """
-    flags = project_data.schedule_flags or {}
     return [
         AdditionalWorkItem(
             work_id="inspection",
@@ -667,7 +666,7 @@ def build_default_additional_works(project_data: ProjectData) -> List[Additional
         AdditionalWorkItem(
             work_id="surveys",
             name="Комплексные инженерные изыскания (ИГДИ, ИГИ, ИЭИ)",
-            enabled=bool(flags.get("surveys", False)),
+            enabled=False,
             cost_net_rub=0.0,
             note="Геодезические, геологические и экологические изыскания",
         ),
