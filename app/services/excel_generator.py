@@ -1,3 +1,4 @@
+import calendar
 import datetime
 import io
 import math
@@ -5,11 +6,14 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from app.models import ProjectData, ProjectMode
-from app.services.pp87_rules import GROUPS, GROUP_COLORS, resolve_schedule, total_weeks
+from app.services.pp87_rules import (
+    GROUPS, GROUP_COLORS, resolve_schedule, parse_date, format_date_ru,
+    total_calendar_days, total_weeks,
+)
 
 MONTH_NAMES_RU = [
-    "Янв", "Фев", "Мар", "Апр", "Май", "Июн",
-    "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
 ]
 
 GROUP_EXCEL_COLORS = {
@@ -18,6 +22,7 @@ GROUP_EXCEL_COLORS = {
     "tx_concept": "F97316",  # Оранжевый (Технология)
     "pd": "2563EB",          # Синий (ПД)
     "approval": "D97706",    # Янтарный (Согласования)
+    "internal_rvk": "0284C7",# Сине-голубой / морской (Внутренняя экспертиза РВК)
     "expertise": "9333EA",   # Пурпурный (Экспертиза)
     "rd": "0D9488",          # Бирюзовый (РД)
     "other": "64748B",       # Серо-голубой (Прочее / РнС)
@@ -27,9 +32,9 @@ GROUP_EXCEL_COLORS = {
 def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     """
     Генерирует профессиональный Календарный график выполнения работ в Excel (.xlsx)
-    с двухуровневой шкалой (Месяцы + Недели), связями этапов, группами и вехами.
+    с двухуровневой шкалой (Месяцы + Декады/Числа 1-10, 11-20, 21-30/31), связями этапов, группами и вехами.
     """
-    resolve_schedule(project_data.schedule_phases)
+    resolve_schedule(project_data.schedule_phases, project_data.start_date)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -61,29 +66,26 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-    num_weeks = max(total_weeks(project_data.schedule_phases), 8)
-    # Округляем до кратного 4 для аккуратных месячных блоков
-    num_months = math.ceil(num_weeks / 4)
-    num_weeks = num_months * 4
+    # Базовая дата старта проекта
+    base_dt = parse_date(project_data.start_date) or datetime.date.today()
+    base_y = base_dt.year
+    base_m = base_dt.month
 
-    # Колонки:
-    # 1: №
-    # 2: Наименование этапа / раздела
-    # 3: Ответственный
-    # 4: Статус
-    # 5: Старт (нед./дата)
-    # 6: Длит. (нед.)
-    # 7: Финиш (нед./дата)
-    # 8: Передано Заказчику
-    # 9: Замечания 1
-    # 10: Ответы 1
-    # 11: Замечания 2
-    # 12: Ответы 2
-    # 13: Результат согласования
-    # 14 .. 13 + num_weeks: Недели Н1..НN
-    # 14 + num_weeks: Примечание
-    first_week_col = 14
-    note_col = first_week_col + num_weeks
+    # Определяем горизонт проекта в месяцах и декадах (числах 1-10, 11-20, 21-конец)
+    enabled_phases = [p for p in project_data.schedule_phases if getattr(p, "enabled", True)]
+    max_finish_dt = base_dt
+    for p in enabled_phases:
+        f_dt = parse_date(p.finish_date)
+        if f_dt and f_dt > max_finish_dt:
+            max_finish_dt = f_dt
+
+    # Общее число месяцев (минимум 2 месяца)
+    month_diff = (max_finish_dt.year - base_y) * 12 + (max_finish_dt.month - base_m) + 1
+    num_months = max(2, month_diff)
+    num_decades = num_months * 3
+
+    first_decade_col = 14
+    note_col = first_decade_col + num_decades
 
     current_row = 1
 
@@ -98,12 +100,12 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
         current_row += 3
 
         ws.cell(row=current_row, column=2, value="ИСПОЛНИТЕЛЬ:").font = font_bold
-        ws.cell(row=current_row, column=first_week_col, value="ЗАКАЗЧИК:").font = font_bold
+        ws.cell(row=current_row, column=first_decade_col, value="ЗАКАЗЧИК:").font = font_bold
 
         contr_name = project_data.contractor or project_data.customer or "Заказчик"
         ws.cell(row=current_row + 1, column=2, value="________________ / ___________ /").font = font_regular
-        ws.cell(row=current_row + 1, column=first_week_col, value=f"{contr_name}").font = font_regular
-        ws.cell(row=current_row + 2, column=first_week_col, value="________________ / ___________ /").font = font_regular
+        ws.cell(row=current_row + 1, column=first_decade_col, value=f"{contr_name}").font = font_regular
+        ws.cell(row=current_row + 2, column=first_decade_col, value="________________ / ___________ /").font = font_regular
         current_row += 4
     else:
         ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=note_col)
@@ -114,9 +116,9 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
     # Объект и сводка сроков
     ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=note_col)
-    actual_weeks = total_weeks(project_data.schedule_phases)
-    actual_months = round(actual_weeks / 4.33, 1)
-    summary_str = f"Объект: {project_data.object_name}   |   Общий срок: {actual_weeks} нед. (~{actual_months} мес.)"
+    actual_days = total_calendar_days(project_data.schedule_phases, project_data.start_date)
+    actual_months = round(actual_days / 30.4375, 1)
+    summary_str = f"Объект: {project_data.object_name}   |   Срок: {actual_days} кал. дн. (~{actual_months} мес.)   |   Период: {format_date_ru(base_dt)} – {format_date_ru(max_finish_dt)}"
     if project_data.customer:
         summary_str += f"   |   Заказчик: {project_data.customer}"
     if project_data.contractor:
@@ -152,35 +154,30 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
         c.font = font_white_bold
         c.alignment = align_center
 
-    # Верхний уровень шкалы: Месяцы (по 4 недели)
-    start_dt = None
-    if project_data.start_date:
-        try:
-            start_dt = datetime.datetime.strptime(project_data.start_date[:10], "%Y-%m-%d")
-        except Exception:
-            start_dt = None
-
+    # Шкала: Месяцы (по 3 колонки) + Числа месяца (1-10, 11-20, 21-30/31)
     for m_idx in range(num_months):
-        w_start_col = first_week_col + m_idx * 4
-        w_end_col = w_start_col + 3
-        ws.merge_cells(start_row=tbl_start_row, start_column=w_start_col, end_row=tbl_start_row, end_column=w_end_col)
-        if start_dt:
-            m_dt = start_dt + datetime.timedelta(days=m_idx * 30.4375)
-            m_label = f"Месяц {m_idx + 1} ({MONTH_NAMES_RU[m_dt.month - 1]} {m_dt.year})"
-        else:
-            m_label = f"Месяц {m_idx + 1}"
-        cm = ws.cell(row=tbl_start_row, column=w_start_col, value=m_label)
+        cur_m = (base_m - 1 + m_idx) % 12 + 1
+        cur_y = base_y + (base_m - 1 + m_idx) // 12
+        _, last_day = calendar.monthrange(cur_y, cur_m)
+
+        d_start_col = first_decade_col + m_idx * 3
+        d_end_col = d_start_col + 2
+        ws.merge_cells(start_row=tbl_start_row, start_column=d_start_col, end_row=tbl_start_row, end_column=d_end_col)
+
+        m_label = f"{MONTH_NAMES_RU[cur_m - 1]} {cur_y}"
+        cm = ws.cell(row=tbl_start_row, column=d_start_col, value=m_label)
         cm.fill = sub_hdr_fill
-        cm.font = Font(name="Calibri", size=9, bold=True, color="1E3A8A")
+        cm.font = Font(name="Calibri", size=9.5, bold=True, color="1E3A8A")
         cm.alignment = align_center
 
-    # Нижний уровень шкалы: Недели Н1..НN
-    for w in range(1, num_weeks + 1):
-        col_idx = first_week_col + w - 1
-        cw = ws.cell(row=sub_row, column=col_idx, value=f"Н{w}")
-        cw.fill = week_hdr_fill
-        cw.font = font_week
-        cw.alignment = align_center
+        # Подшапка: точные числа месяца
+        decade_labels = ["1-10", "11-20", f"21-{last_day}"]
+        for d_i, d_lbl in enumerate(decade_labels):
+            col_idx = d_start_col + d_i
+            cw = ws.cell(row=sub_row, column=col_idx, value=d_lbl)
+            cw.fill = week_hdr_fill
+            cw.font = font_week
+            cw.alignment = align_center
 
     # Колонка Примечание
     ws.merge_cells(start_row=tbl_start_row, start_column=note_col, end_row=sub_row, end_column=note_col)
@@ -197,7 +194,6 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
 
     # 3. Вывод строк графика с группировкой по блокам
     last_group = None
-    enabled_phases = [p for p in project_data.schedule_phases if getattr(p, "enabled", True)]
     for idx, phase in enumerate(enabled_phases, start=1):
         grp = phase.group or "pd"
         if grp != last_group:
@@ -212,15 +208,13 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
                 ws.cell(row=current_row, column=col).border = thin_border
             current_row += 1
 
-        finish_week = phase.start_week if phase.milestone else (phase.start_week + max(1, phase.duration_weeks) - 1)
+        p_start_dt = parse_date(phase.start_date) or base_dt
+        p_finish_dt = parse_date(phase.finish_date) or p_start_dt
+        dur_days = 0 if phase.milestone else max(1, getattr(phase, "duration_days", 14))
 
-        start_str = f"Н{phase.start_week}"
-        finish_str = f"Н{finish_week}"
-        if start_dt:
-            p_start_date = start_dt + datetime.timedelta(days=(phase.start_week - 1) * 7)
-            p_finish_date = start_dt + datetime.timedelta(days=finish_week * 7)
-            start_str = p_start_date.strftime("%d.%m.%Y")
-            finish_str = p_finish_date.strftime("%d.%m.%Y")
+        start_str = format_date_ru(p_start_dt)
+        finish_str = format_date_ru(p_finish_dt)
+        dur_str = "Веха" if phase.milestone else f"{dur_days} дн."
 
         row_vals = [
             (1, phase.id or idx, align_center, font_bold if phase.milestone else font_regular),
@@ -228,7 +222,7 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
             (3, getattr(phase, "resp_party", "Проектировщик"), align_center, font_regular),
             (4, getattr(phase, "status", "В работе"), align_center, font_regular),
             (5, start_str, align_center, font_regular),
-            (6, "Веха" if phase.milestone else f"{phase.duration_weeks} нед.", align_center, font_regular),
+            (6, dur_str, align_center, font_regular),
             (7, finish_str, align_center, font_regular),
             (8, getattr(phase, "sent_to_client_date", "") or "—", align_center, font_regular),
             (9, getattr(phase, "client_remarks_1_date", "") or "—", align_center, font_regular),
@@ -245,24 +239,31 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
             if phase.milestone:
                 cell.fill = milestone_fill
 
+        # Индексы декад для Ганта
+        start_dec_idx = (p_start_dt.year - base_y) * 12 + (p_start_dt.month - base_m)
+        start_dec_idx = start_dec_idx * 3 + (0 if p_start_dt.day <= 10 else (1 if p_start_dt.day <= 20 else 2))
+
+        finish_dec_idx = (p_finish_dt.year - base_y) * 12 + (p_finish_dt.month - base_m)
+        finish_dec_idx = finish_dec_idx * 3 + (0 if p_finish_dt.day <= 10 else (1 if p_finish_dt.day <= 20 else 2))
+
         bar_hex = GROUP_EXCEL_COLORS.get(grp, "3B82F6")
         bar_fill = PatternFill(start_color=bar_hex, end_color=bar_hex, fill_type="solid")
 
-        for w in range(1, num_weeks + 1):
-            col_idx = first_week_col + w - 1
+        for d_col in range(num_decades):
+            col_idx = first_decade_col + d_col
             cw = ws.cell(row=current_row, column=col_idx)
             cw.border = thin_border
             if phase.milestone:
                 cw.fill = milestone_fill
-                if w == phase.start_week:
+                if d_col == start_dec_idx:
                     cw.value = "◆"
                     cw.alignment = align_center
                     cw.font = font_milestone
             else:
-                if phase.start_week <= w <= finish_week:
+                if start_dec_idx <= d_col <= finish_dec_idx:
                     cw.fill = bar_fill
-                    if w == phase.start_week:
-                        cw.value = f"{phase.duration_weeks}н"
+                    if d_col == start_dec_idx:
+                        cw.value = f"{dur_days}д"
                         cw.alignment = align_center
                         cw.font = font_bar
 
@@ -289,9 +290,9 @@ def generate_excel_schedule(project_data: ProjectData) -> io.BytesIO:
     ws.column_dimensions["K"].width = 12
     ws.column_dimensions["L"].width = 12
     ws.column_dimensions["M"].width = 20
-    for w in range(1, num_weeks + 1):
-        col_letter = get_column_letter(first_week_col + w - 1)
-        ws.column_dimensions[col_letter].width = 4.2
+    for d_col in range(num_decades):
+        col_letter = get_column_letter(first_decade_col + d_col)
+        ws.column_dimensions[col_letter].width = 6.0
     ws.column_dimensions[get_column_letter(note_col)].width = 32
 
     ws.row_dimensions[tbl_start_row].height = 22
