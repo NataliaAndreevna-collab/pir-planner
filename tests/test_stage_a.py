@@ -273,3 +273,18 @@ def test_kp_for_rd_only(tec1_cost):
     req = KPRequest(project=tec1_cost, stage=KPStage.RD)
     stream = generate_kp_docx(req)
     assert len(stream.getvalue()) > 5000
+
+
+def test_additional_works_have_no_hidden_default_cost(tec1_cost):
+    from app.services.cost_estimator import build_default_additional_works
+
+    tec1_cost.schedule_flags = {"surveys": True}
+    works = build_default_additional_works(tec1_cost)
+    assert all(w.cost_net_rub == 0 for w in works)
+
+    cp = tec1_cost.cost_parameters
+    cp.additional_works = works
+    recalculate_cost_parameters(cp, has_pd=tec1_cost.has_pd, has_rd=tec1_cost.has_rd)
+    assert cp.additional_works_total_net_rub == 0
+    assert cp.total_cost_net_rub == 0
+    assert any("Дополнительная работа" in w for w in cp.warnings)

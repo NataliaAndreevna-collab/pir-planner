@@ -650,28 +650,32 @@ def build_default_specialist_rows(catalog: Dict[str, Any]) -> List[SpecialistLab
 
 
 def build_default_additional_works(project_data: ProjectData) -> List[AdditionalWorkItem]:
-    """Формирует список дополнительных видов работ (обследование, ИИ, экспертиза)."""
+    """
+    Формирует список дополнительных видов работ (обследование, ИИ, экспертиза).
+    Суммы по умолчанию НЕ задаются (0 ₽): стоимость вводит специалист. Раньше здесь были зашитые
+    суммы, которые молча попадали в итог при включении изысканий.
+    """
     flags = project_data.schedule_flags or {}
     return [
         AdditionalWorkItem(
             work_id="inspection",
             name="Техническое обследование зданий, сооружений и сетей",
             enabled=False,
-            cost_net_rub=180000.0,
+            cost_net_rub=0.0,
             note="Включается отдельно, если не учтено в таблицах сборников № 270/пр или № 283/пр",
         ),
         AdditionalWorkItem(
             work_id="surveys",
             name="Комплексные инженерные изыскания (ИГДИ, ИГИ, ИЭИ)",
             enabled=bool(flags.get("surveys", False)),
-            cost_net_rub=350000.0,
+            cost_net_rub=0.0,
             note="Геодезические, геологические и экологические изыскания",
         ),
         AdditionalWorkItem(
             work_id="expertise",
             name="Сопровождение в экспертизе и проверка достоверности определения сметной стоимости",
             enabled=False,
-            cost_net_rub=120000.0,
+            cost_net_rub=0.0,
             note="Подача и сопровождение документации в ГАУ ТО «УГЭПД» / негосударственной экспертизе",
         ),
     ]
@@ -970,6 +974,9 @@ def recalculate_cost_parameters(
         2,
     )
     cost_params.additional_works_total_net_rub = add_works_sum
+    for w in cost_params.additional_works:
+        if w.enabled and float(w.cost_net_rub) <= 0:
+            warnings.append(f"Дополнительная работа «{w.name}» включена, но стоимость не указана — введите сумму вручную.")
 
     # =========================================================================
     # Выбор активного расчёта, который пойдёт в итоговую смету и КП
