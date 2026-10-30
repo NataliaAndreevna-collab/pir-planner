@@ -193,6 +193,7 @@ async function runParseTZ(engine) {
     populateForm(currentProject);
     renderSectionsTable();
     renderScheduleTable();
+    if (typeof renderCostTab === "function") renderCostTab();
 
     workspaceCard.classList.remove("hidden");
     insightsCard.classList.remove("hidden");
@@ -254,6 +255,7 @@ async function applyPresetBackend(preset) {
       updatePresetButtonsUI();
       renderSectionsTable();
       renderScheduleTable();
+      if (typeof renderCostTab === "function") renderCostTab();
     }
   } catch (err) {
     console.error("Ошибка применения режима комплектности:", err);
@@ -366,6 +368,7 @@ selectFacilityType.addEventListener("change", async () => {
   updatePresetButtonsUI();
   renderSectionsTable();
   renderScheduleTable();
+  if (typeof renderCostTab === "function") renderCostTab();
 });
 
 // Пересчет шифров и номеров томов
@@ -408,6 +411,7 @@ function recalculateCiphers() {
   });
 
   renderSectionsTable();
+  if (typeof renderCostTab === "function") renderCostTab();
 }
 
 function syncProjectFromInputs() {
@@ -480,6 +484,7 @@ async function syncSectionsWithBackend() {
     console.error(e);
   }
   renderSectionsTable();
+  if (typeof renderCostTab === "function") renderCostTab();
 }
 
 // Добавление пользовательского раздела ПД или марки РД
@@ -1470,13 +1475,18 @@ function renderScheduleTable() {
 }
 
 // Переключение вкладок
+const tabBtnCost = document.getElementById("tabBtnCost");
+const tabContentCost = document.getElementById("tabContentCost");
+const costTotalBadge = document.getElementById("costTotalBadge");
+
 tabBtnSections.addEventListener("click", () => switchTab("sections"));
 tabBtnSchedule.addEventListener("click", () => switchTab("schedule"));
+if (tabBtnCost) tabBtnCost.addEventListener("click", () => switchTab("cost"));
 
 function switchTab(tab) {
   activeTab = tab;
 
-  [tabBtnSections, tabBtnSchedule].forEach((btn) => {
+  [tabBtnSections, tabBtnSchedule, tabBtnCost].forEach((btn) => {
     if (btn) {
       btn.className = "py-3.5 px-4 font-medium text-sm text-slate-500 hover:text-slate-800 border-b-2 border-transparent flex items-center";
     }
@@ -1484,6 +1494,7 @@ function switchTab(tab) {
 
   tabContentSections.classList.add("hidden");
   tabContentSchedule.classList.add("hidden");
+  if (tabContentCost) tabContentCost.classList.add("hidden");
 
   if (tab === "sections") {
     tabBtnSections.className = "py-3.5 px-4 font-semibold text-sm border-b-2 border-blue-600 text-blue-600 flex items-center";
@@ -1492,6 +1503,10 @@ function switchTab(tab) {
     tabBtnSchedule.className = "py-3.5 px-4 font-semibold text-sm border-b-2 border-blue-600 text-blue-600 flex items-center";
     tabContentSchedule.classList.remove("hidden");
     renderScheduleTable();
+  } else if (tab === "cost" && tabContentCost) {
+    tabBtnCost.className = "py-3.5 px-4 font-semibold text-sm border-b-2 border-emerald-600 text-emerald-700 flex items-center";
+    tabContentCost.classList.remove("hidden");
+    renderCostTab();
   }
 }
 
@@ -1572,3 +1587,1047 @@ btnDownloadXlsx.addEventListener("click", async () => {
     btnDownloadXlsx.innerHTML = '<i class="fa-solid fa-calendar-days mr-2 text-emerald-200"></i> Скачать Календарный график (.xlsx)';
   }
 });
+
+// ==========================================
+// МОДУЛЬ 3: РАСЧЁТ СТОИМОСТИ ПИР И НОРМАТИВНАЯ БАЗА
+// ==========================================
+
+let normativeCatalog = null;
+let indicesStaleness = null;
+
+function formatRub(val) {
+  const n = Number(val) || 0;
+  return n.toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " ₽";
+}
+
+async function loadNormativeCatalog() {
+  try {
+    const res = await fetch("/api/normative-catalog");
+    if (!res.ok) return;
+    const data = await res.json();
+    normativeCatalog = data.catalog;
+    indicesStaleness = data.staleness;
+    renderIndicesBanner();
+  } catch (e) {
+    console.error("Ошибка загрузки нормативной базы:", e);
+  }
+}
+
+loadNormativeCatalog();
+
+function renderIndicesBanner() {
+  const banner = document.getElementById("indicesStalenessBanner");
+  const statusTxt = document.getElementById("indicesStatusText");
+  const subTxt = document.getElementById("indicesPeriodSubtext");
+  if (!banner || !normativeCatalog) return;
+
+  const idx = normativeCatalog.indices || {};
+  const isStale = indicesStaleness ? indicesStaleness.is_stale : false;
+
+  if (isStale) {
+    banner.className = "rounded-xl border border-amber-300 bg-amber-50 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs";
+    statusTxt.textContent = indicesStaleness.warning_message;
+  } else {
+    banner.className = "rounded-xl border border-emerald-300 bg-emerald-50/70 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs";
+    statusTxt.textContent = indicesStaleness ? indicesStaleness.warning_message : "Индексы Минстроя РФ актуальны.";
+  }
+
+  const pir = idx.pir || {};
+  const surv = idx.survey || {};
+  subTxt.textContent = `${idx.period_label || ""} (${idx.letter_ref || ""}) — ПИР: [1995=${pir["1995"]}; 2001=${pir["2001"]}; 2021=${pir["2021"]}; 2022=${pir["2022"]}; 2023=${pir["2023"]}; 2024=${pir["2024"]}] | ИИ(2024)=${surv["2024"]}`;
+
+  // Заполняем поля редактора индексов
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el && v !== undefined) el.value = v;
+  };
+  setVal("inpIdxPeriodLabel", idx.period_label || "");
+  setVal("inpIdxLetterRef", idx.letter_ref || "");
+  setVal("inpIdxPir1995", pir["1995"]);
+  setVal("inpIdxPir2001", pir["2001"]);
+  setVal("inpIdxPir2021", pir["2021"]);
+  setVal("inpIdxPir2022", pir["2022"]);
+  setVal("inpIdxPir2023", pir["2023"]);
+  setVal("inpIdxPir2024", pir["2024"]);
+  setVal("inpIdxSurvey2024", surv["2024"]);
+  setVal("inpIdxSurvey2001", surv["2001"]);
+  setVal("inpIdxSmr2001", idx.smr_to_2001_index || 11.45);
+}
+
+const btnToggleIndicesEditor = document.getElementById("btnToggleIndicesEditor");
+const indicesEditorPanel = document.getElementById("indicesEditorPanel");
+if (btnToggleIndicesEditor && indicesEditorPanel) {
+  btnToggleIndicesEditor.addEventListener("click", () => {
+    indicesEditorPanel.classList.toggle("hidden");
+  });
+}
+
+const btnSaveIndices = document.getElementById("btnSaveIndices");
+if (btnSaveIndices) {
+  btnSaveIndices.addEventListener("click", async () => {
+    const getNum = (id, def) => parseFloat(document.getElementById(id)?.value) || def;
+    const payload = {
+      period_label: document.getElementById("inpIdxPeriodLabel")?.value || "",
+      letter_ref: document.getElementById("inpIdxLetterRef")?.value || "",
+      smr_to_2001_index: getNum("inpIdxSmr2001", 11.45),
+      pir: {
+        "1995": getNum("inpIdxPir1995", 55.26),
+        "2001": getNum("inpIdxPir2001", 7.22),
+        "2021": getNum("inpIdxPir2021", 1.71),
+        "2022": getNum("inpIdxPir2022", 1.56),
+        "2023": getNum("inpIdxPir2023", 1.40),
+        "2024": getNum("inpIdxPir2024", 1.29),
+      },
+      survey: {
+        "2001": getNum("inpIdxSurvey2001", 7.19),
+        "2024": getNum("inpIdxSurvey2024", 1.27),
+      },
+    };
+    try {
+      const res = await fetch("/api/update-indices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        normativeCatalog = data.catalog;
+        indicesStaleness = data.staleness;
+        renderIndicesBanner();
+        indicesEditorPanel.classList.add("hidden");
+        await recalculateCostBackend();
+      }
+    } catch (e) {
+      alert("Ошибка сохранения индексов: " + e.message);
+    }
+  });
+}
+
+// Загрузка нового сборника (.docx или .pdf) целиком
+const inputUploadCollectionFile = document.getElementById("inputUploadCollectionFile");
+if (inputUploadCollectionFile) {
+  inputUploadCollectionFile.addEventListener("change", async () => {
+    if (!inputUploadCollectionFile.files || !inputUploadCollectionFile.files.length) return;
+    const file = inputUploadCollectionFile.files[0];
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/upload-collection", { method: "POST", body: fd });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Ошибка разбора файла сборника");
+      }
+      const data = await res.json();
+      normativeCatalog = data.catalog;
+      const added = data.added_collection;
+      alert(`Сборник «${added.title}» (базовый уровень цен: 01.01.${added.base_year} г., распознано расценок: ${added.items.length}) успешно добавлен в базу!`);
+      renderCostTab();
+    } catch (e) {
+      alert("Ошибка подгрузки сборника: " + e.message);
+    } finally {
+      inputUploadCollectionFile.value = "";
+    }
+  });
+}
+
+function syncCostInputsToModel() {
+  if (!currentProject || !currentProject.cost_parameters) return;
+  const cp = currentProject.cost_parameters;
+
+  const vatSel = document.getElementById("selectVatMode");
+  if (vatSel) {
+    const v = parseFloat(vatSel.value);
+    if (v === 0) {
+      cp.include_vat = false;
+      cp.vat_rate = 0;
+    } else {
+      cp.include_vat = true;
+      cp.vat_rate = v;
+    }
+  }
+
+  const smrInp = document.getElementById("inputSmrMln");
+  if (smrInp) cp.smr_cost_mln_rub = parseFloat(smrInp.value) || 0;
+
+  const chkRec = document.getElementById("chkCostReconstr");
+  if (chkRec) cp.is_reconstruction = chkRec.checked;
+
+  const chkBim = document.getElementById("chkCostBim");
+  if (chkBim) cp.use_bim = chkBim.checked;
+
+  const inpComp = document.getElementById("inpCostComplexity");
+  if (inpComp) cp.complexity_factor = parseFloat(inpComp.value) || 1.0;
+
+  const inpUrg = document.getElementById("inpCostUrgency");
+  if (inpUrg) cp.urgency_factor = parseFloat(inpUrg.value) || 1.0;
+
+  const inpRegSal = document.getElementById("inpRegionalSalary707");
+  if (inpRegSal) cp.regional_monthly_salary_707 = parseFloat(inpRegSal.value) || 95000;
+
+  const inpWd707 = document.getElementById("inpWorkDays707");
+  if (inpWd707) cp.work_days_707 = parseFloat(inpWd707.value) || 20.6;
+
+  const inpK3 = document.getElementById("inpK3SalaryShare707");
+  if (inpK3) cp.k3_salary_share_707 = parseFloat(inpK3.value) || 0.4006;
+
+  const inpProf707 = document.getElementById("inpProfitability707Pct");
+  if (inpProf707) cp.profitability_707 = (parseFloat(inpProf707.value) || 10) / 100.0;
+
+  const inpWdMkt = document.getElementById("inpWorkDaysMarket");
+  if (inpWdMkt) cp.work_days_per_month = parseFloat(inpWdMkt.value) || 21.0;
+
+  const inpOvh = document.getElementById("inpOverheadPct");
+  if (inpOvh) cp.overhead_percent = parseFloat(inpOvh.value) || 60;
+
+  const inpPrf = document.getElementById("inpProfitPct");
+  if (inpPrf) cp.profit_percent = parseFloat(inpPrf.value) || 20;
+
+  const chkSplit = document.getElementById("chkSplitPdRdCost");
+  if (chkSplit) cp.split_pd_rd_in_cost = chkSplit.checked;
+}
+
+async function recalculateCostBackend() {
+  if (!currentProject) return;
+  syncProjectFromInputs();
+  syncCostInputsToModel();
+  try {
+    const res = await fetch("/api/calculate-cost", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentProject),
+    });
+    if (res.ok) {
+      currentProject = await res.json();
+      renderCostTab();
+    }
+  } catch (e) {
+    console.error("Ошибка расчёта стоимости:", e);
+  }
+}
+
+let costInitInFlight = false;
+
+function clearCostTabView() {
+  // Сбрасываем цифры прошлого расчёта, чтобы при загрузке другого ТЗ не оставались старые значения
+  ["costSummaryNetRub", "costSummaryVatRub", "costSummaryGrossRub"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = "0 ₽";
+  });
+  const warnBox = document.getElementById("costWarnings");
+  if (warnBox) {
+    warnBox.classList.add("hidden");
+    warnBox.innerHTML = "";
+  }
+  const colBody = document.getElementById("collectionItemsTableBody");
+  if (colBody) colBody.innerHTML = "";
+  if (costTotalBadge) costTotalBadge.textContent = formatRub(0);
+}
+
+function renderCostTab() {
+  if (!currentProject) return;
+  if (!currentProject.cost_parameters) {
+    // Расчёта ещё нет (ТЗ только что разобрано): очищаем старые цифры и запрашиваем расчёт у сервера
+    clearCostTabView();
+    if (!costInitInFlight) {
+      costInitInFlight = true;
+      recalculateCostBackend().finally(() => {
+        costInitInFlight = false;
+      });
+    }
+    return;
+  }
+  const cp = currentProject.cost_parameters;
+
+  if (costTotalBadge) {
+    costTotalBadge.textContent = formatRub(cp.total_cost_gross_rub || cp.total_cost_net_rub);
+  }
+
+  const elNet = document.getElementById("costSummaryNetRub");
+  const elPirSub = document.getElementById("costSummaryPirSub");
+  const elVat = document.getElementById("costSummaryVatRub");
+  const elGross = document.getElementById("costSummaryGrossRub");
+  const elLaborSub = document.getElementById("costSummaryLaborSub");
+
+  if (elNet) elNet.textContent = formatRub(cp.total_cost_net_rub);
+  if (elPirSub) {
+    elPirSub.textContent =
+      cp.additional_works_total_net_rub > 0
+        ? `ПИР: ${formatRub(cp.pir_only_cost_net_rub)} + Доп.: ${formatRub(cp.additional_works_total_net_rub)}`
+        : "Основные проектные работы (без НДС)";
+  }
+  if (elVat) elVat.textContent = cp.include_vat ? formatRub(cp.vat_rub) : "Без НДС (0 ₽)";
+  if (elGross) elGross.textContent = formatRub(cp.total_cost_gross_rub);
+  if (elLaborSub) elLaborSub.textContent = `Расчётная трудоёмкость: ${cp.total_labor_days || 0} чел.-дней`;
+
+  const warnBox = document.getElementById("costWarnings");
+  if (warnBox) {
+    const warns = cp.warnings || [];
+    warnBox.classList.toggle("hidden", warns.length === 0);
+    warnBox.innerHTML = warns.length
+      ? '<div class="font-bold"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>Внимание: расчёт неполный</div>' +
+        warns.map((w) => `<div>• ${String(w).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`).join("")
+      : "";
+  }
+
+  const vatSel = document.getElementById("selectVatMode");
+  if (vatSel) vatSel.value = cp.include_vat ? String(cp.vat_rate) : "0";
+
+  const smrInp = document.getElementById("inputSmrMln");
+  const smrValEl = document.getElementById("costSmrRefValue");
+  const smrSubEl = document.getElementById("costSmrRefSub");
+  if (smrInp) smrInp.value = cp.smr_cost_mln_rub > 0 ? cp.smr_cost_mln_rub : "";
+  if (smrValEl) {
+    smrValEl.textContent =
+      cp.smr_reference_pir_cost_rub > 0
+        ? `${formatRub(cp.smr_reference_pir_cost_rub)} (${cp.smr_normative_pct}%)`
+        : "Введите СМР (млн ₽)";
+  }
+  if (smrSubEl) {
+    smrSubEl.textContent = cp.smr_detected_from_tz
+      ? "Извлечено из ТЗ • Табл. 1.5 Методики № 707/пр"
+      : "Справочно по Табл. 1.5 Методики № 707/пр";
+  }
+
+  // Независимые итоги на 4 карточках сравнения
+  const indCol = document.getElementById("indTotalCollections");
+  if (indCol) indCol.textContent = formatRub(cp.collections_total_net_rub || 0);
+  const ind707 = document.getElementById("indTotalLabor707");
+  if (ind707) ind707.textContent = formatRub(cp.labor_707_total_net_rub || 0);
+  const indMkt = document.getElementById("indTotalLaborMarket");
+  if (indMkt) indMkt.textContent = formatRub(cp.labor_market_total_net_rub || 0);
+  const indSmr = document.getElementById("indTotalSmr");
+  if (indSmr) {
+    indSmr.textContent = cp.smr_reference_pir_cost_rub > 0 ? formatRub(cp.smr_reference_pir_cost_rub) : "Введите СМР";
+  }
+
+  // Переключатели метода расчёта
+  const activeMethod = cp.calculation_method || "by_collections";
+  document.querySelectorAll(".cost-method-btn").forEach((btn) => {
+    const m = btn.dataset.method;
+    btn.className =
+      m === activeMethod
+        ? "cost-method-btn text-left p-3 rounded-xl border transition bg-blue-600 text-white border-blue-700 shadow-xs"
+        : "cost-method-btn text-left p-3 rounded-xl border transition bg-white text-slate-800 border-slate-300 hover:border-blue-400";
+  });
+
+  const panelCol = document.getElementById("panelMethodCollections");
+  const panelLab707 = document.getElementById("panelMethodLabor707");
+  const panelLabMkt = document.getElementById("panelMethodLaborMarket");
+  if (panelCol && panelLab707 && panelLabMkt) {
+    panelCol.classList.toggle("hidden", activeMethod === "labor_707" || activeMethod === "labor_internal");
+    panelLab707.classList.toggle("hidden", activeMethod !== "labor_707");
+    panelLabMkt.classList.toggle("hidden", activeMethod !== "labor_internal");
+  }
+
+  // Коэффициенты
+  const chkRec = document.getElementById("chkCostReconstr");
+  if (chkRec) chkRec.checked = !!cp.is_reconstruction;
+  const chkBim = document.getElementById("chkCostBim");
+  if (chkBim) chkBim.checked = !!cp.use_bim;
+  const inpComp = document.getElementById("inpCostComplexity");
+  if (inpComp) inpComp.value = cp.complexity_factor ?? 1.0;
+  const inpUrg = document.getElementById("inpCostUrgency");
+  if (inpUrg) inpUrg.value = cp.urgency_factor ?? 1.0;
+
+  // Параметры Метода 2А (Методика № 707/пр)
+  const inpRegSal = document.getElementById("inpRegionalSalary707");
+  if (inpRegSal) inpRegSal.value = cp.regional_monthly_salary_707 || 95000;
+  const inpWd707 = document.getElementById("inpWorkDays707");
+  if (inpWd707) inpWd707.value = cp.work_days_707 || 20.6;
+  const inpK3 = document.getElementById("inpK3SalaryShare707");
+  if (inpK3) inpK3.value = cp.k3_salary_share_707 || 0.4006;
+  const inpProf707 = document.getElementById("inpProfitability707Pct");
+  if (inpProf707) inpProf707.value = Math.round((cp.profitability_707 ?? 0.10) * 100);
+  const lblVsr = document.getElementById("lblVsr707");
+  if (lblVsr) lblVsr.textContent = formatRub(cp.v_sr_707_rub || 0) + "/дн.";
+  const lblKkv = document.getElementById("lblKkvUch707");
+  if (lblKkv) lblKkv.textContent = Number(cp.k_kv_uch_707 || 1).toFixed(4);
+  const lblF707 = document.getElementById("lblFormula707");
+  if (lblF707) lblF707.textContent = cp.labor_707_formula_text || "";
+
+  // Параметры Метода 2Б (Рыночная таблица г. Тюмень)
+  const inpWdMkt = document.getElementById("inpWorkDaysMarket");
+  if (inpWdMkt) inpWdMkt.value = cp.work_days_per_month || 21;
+  const inpOvh = document.getElementById("inpOverheadPct");
+  if (inpOvh) inpOvh.value = cp.overhead_percent ?? 60;
+  const inpPrf = document.getElementById("inpProfitPct");
+  if (inpPrf) inpPrf.value = cp.profit_percent ?? 20;
+  const lblFMkt = document.getElementById("lblFormulaMarket");
+  if (lblFMkt) lblFMkt.textContent = cp.labor_market_formula_text || "";
+
+  const chkSplit = document.getElementById("chkSplitPdRdCost");
+  if (chkSplit) chkSplit.checked = !!cp.split_pd_rd_in_cost;
+
+  renderCollectionItemsTable(cp);
+  renderLabor707RowsTable(cp);
+  renderSpecialistRowsTable(cp);
+  renderAdditionalWorksBlock(cp);
+  renderCostSectionsTable(cp);
+}
+
+function renderCollectionItemsTable(cp) {
+  const tbody = document.getElementById("collectionItemsTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  const cols = (normativeCatalog && normativeCatalog.collections) || [];
+  const items = cp.collection_items || [];
+
+  items.forEach((q, idx) => {
+    const tr = document.createElement("tr");
+    tr.className = `hover:bg-blue-50/30 transition ${!q.enabled ? "opacity-50 bg-slate-50" : ""}`;
+
+    const selectedCol = cols.find((c) => c.id === q.collection_id) || cols[0] || { items: [] };
+    const colOptions = cols
+      .map(
+        (c) =>
+          `<option value="${c.id}" ${c.id === selectedCol.id ? "selected" : ""}>№${c.num}. ${c.title} [цены ${c.base_year} г.]</option>`
+      )
+      .join("");
+
+    const colItems = selectedCol.items || [];
+    const itemOptions = colItems
+      .map(
+        (it) =>
+          `<option value="${it.id}" ${it.id === q.item_id ? "selected" : ""}>${it.table_ref ? it.table_ref + " — " : ""}${it.name}</option>`
+      )
+      .join("");
+
+    // Специальные поля для № 283/пр и № 270/пр
+    let extraControlsHtml = "";
+    if (selectedCol.calc_type === "survey_283") {
+      extraControlsHtml = `
+        <label class="inline-flex items-center mt-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded cursor-pointer">
+          <input type="checkbox" class="col-item-adv w-3.5 h-3.5 text-emerald-600 rounded mr-1.5" data-idx="${idx}" ${q.adverse_period ? "checked" : ""}>
+          Неблагоприятный период года (Тюменская обл. +19%)
+        </label>
+      `;
+    } else if (selectedCol.calc_type === "obmer_270") {
+      const heights = [4, 6, 8, 10, 12, 15, 18, 21];
+      const hOpts = heights
+        .map((h) => `<option value="h_up_to_${h}" ${String(q.height_group).includes(String(h)) ? "selected" : ""}>Высота до ${h} м</option>`)
+        .join("");
+      extraControlsHtml = `
+        <div class="grid grid-cols-2 gap-1.5 mt-1.5 text-[11px]">
+          <select class="col-item-wt border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">
+            <option value="obmer_plus_obsled" ${q.work_type === "obmer_plus_obsled" ? "selected" : ""}>Многоэт.: Обмеры + Обследование</option>
+            <option value="single_obmer_plus_obsled" ${q.work_type === "single_obmer_plus_obsled" ? "selected" : ""}>Одноэт.: Обмеры + Обследование</option>
+            <option value="obmer" ${q.work_type === "obmer" ? "selected" : ""}>Только обмерные работы</option>
+            <option value="obsled" ${q.work_type === "obsled" ? "selected" : ""}>Только обследование конструкций</option>
+          </select>
+          <select class="col-item-hg border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">${hOpts}</select>
+          <select class="col-item-bcat border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">
+            <option value="I" ${q.building_category === "I" ? "selected" : ""}>Кат. здания: I</option>
+            <option value="II" ${q.building_category === "II" ? "selected" : ""}>Кат. здания: II</option>
+            <option value="III" ${q.building_category === "III" ? "selected" : ""}>Кат. здания: III</option>
+          </select>
+          <select class="col-item-wcomp border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">
+            <option value="I" ${q.work_complexity === "I" ? "selected" : ""}>Сложн. работ: I</option>
+            <option value="II" ${q.work_complexity === "II" ? "selected" : ""}>Сложн. работ: II</option>
+            <option value="III" ${q.work_complexity === "III" ? "selected" : ""}>Сложн. работ: III</option>
+          </select>
+        </div>
+      `;
+    }
+
+    tr.innerHTML = `
+      <td class="py-2.5 px-3 text-center align-top">
+        <input type="checkbox" class="col-item-chk w-4 h-4 text-blue-600 rounded border-slate-300 mt-1" data-idx="${idx}" ${q.enabled ? "checked" : ""}>
+      </td>
+      <td class="py-2.5 px-3 align-top">
+        <select class="col-item-col w-full text-xs font-semibold border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800" data-idx="${idx}">
+          ${colOptions}
+        </select>
+        <span class="block text-[10px] text-slate-500 mt-1">${selectedCol.code || ""}</span>
+      </td>
+      <td class="py-2.5 px-3 align-top">
+        <select class="col-item-rate w-full text-xs border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800" data-idx="${idx}">
+          ${itemOptions}
+        </select>
+        ${extraControlsHtml}
+      </td>
+      <td class="py-2.5 px-3 text-center align-top">
+        <input type="number" step="any" min="0" class="col-item-x w-24 text-center font-mono font-bold text-xs border ${q.x_value > 0 ? "border-blue-300" : "border-amber-400 bg-amber-50"} rounded px-2 py-1 bg-white text-blue-900" data-idx="${idx}" value="${q.x_value > 0 ? q.x_value : ""}" placeholder="введите X">
+        <span class="block text-[10px] text-slate-500 mt-1">${q.unit || "ед."}</span>
+        ${q.warning ? `<span class="block text-[10px] text-amber-700 font-semibold mt-1">${q.warning}</span>` : ""}
+      </td>
+      <td class="py-2.5 px-3 text-center align-top space-y-1">
+        <select class="col-item-stage w-full text-[11px] font-semibold border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">
+          <option value="pd_rd" ${q.stage_mode === "pd_rd" ? "selected" : ""}>П + Р (100%)</option>
+          <option value="pd" ${q.stage_mode === "pd" ? "selected" : ""}>Только П</option>
+          <option value="rd" ${q.stage_mode === "rd" ? "selected" : ""}>Только Р</option>
+        </select>
+        <div class="flex items-center justify-center gap-1 text-[10px]" title="Доля разрабатываемых разделов относительно полного комплекса по сборнику (К_разд), %">
+          <span class="text-slate-600 font-semibold">Разделы, %:</span>
+          <input type="number" step="1" min="1" max="100" class="col-item-comp w-14 text-center font-mono font-bold border border-blue-300 rounded px-1 py-0.5 bg-white text-blue-900" data-idx="${idx}" value="${q.completeness_pct ?? 100}">
+        </div>
+        <div class="flex items-center justify-center gap-1 text-[10px]">
+          <span class="text-slate-500">К_попр:</span>
+          <input type="number" step="0.05" min="0.1" max="5.0" class="col-item-k w-14 text-center font-mono border border-slate-300 rounded px-1 py-0.5 bg-white" data-idx="${idx}" value="${q.k_coeff || 1.0}">
+        </div>
+      </td>
+      <td class="py-2.5 px-3 align-top font-mono text-[11px] text-slate-700">
+        <div class="bg-slate-50 border border-slate-200 rounded p-1.5">${q.formula_text || "—"}</div>
+        <span class="block text-[10px] text-slate-500 mt-1">База (01.01.${q.price_level_year}): <b>${formatRub(q.base_cost_rub)}</b></span>
+      </td>
+      <td class="py-2.5 px-3 text-right align-top font-mono font-bold text-sm text-emerald-700 whitespace-nowrap">
+        ${formatRub(q.current_cost_rub)}
+      </td>
+      <td class="py-2.5 px-2 text-center align-top">
+        <button type="button" class="col-item-del text-slate-400 hover:text-rose-600 p-1" data-idx="${idx}" title="Удалить позицию">
+          <i class="fa-solid fa-trash-can"></i>
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Обработчики событий в таблице сборников
+  tbody.querySelectorAll(".col-item-chk").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      items[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-col").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const newColId = e.target.value;
+      const foundCol = cols.find((c) => c.id === newColId);
+      items[idx].collection_id = newColId;
+      if (foundCol && foundCol.items && foundCol.items.length) {
+        items[idx].item_id = foundCol.items[0].id;
+      }
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-rate").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].item_id = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-x").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].x_value = parseFloat(e.target.value) || 0;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-stage").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].stage_mode = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-comp").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].completeness_pct = Math.min(100, Math.max(1, parseFloat(e.target.value) || 100));
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-k").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].k_coeff = parseFloat(e.target.value) || 1.0;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-adv").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].adverse_period = e.target.checked;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-wt").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].work_type = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-hg").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].height_group = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-bcat").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].building_category = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-wcomp").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      items[idx].work_complexity = e.target.value;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".col-item-del").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      const idx = parseInt(e.currentTarget.dataset.idx, 10);
+      items.splice(idx, 1);
+      recalculateCostBackend();
+    });
+  });
+}
+
+const btnAddCollectionRow = document.getElementById("btnAddCollectionRow");
+if (btnAddCollectionRow) {
+  btnAddCollectionRow.addEventListener("click", () => {
+    if (!currentProject || !currentProject.cost_parameters) return;
+    const cols = (normativeCatalog && normativeCatalog.collections) || [];
+    const firstCol = cols[0] || { id: "mnz_53pr", items: [{ id: "53pr_t1_p1" }] };
+    currentProject.cost_parameters.collection_items.push({
+      row_id: "col_row_" + Date.now(),
+      collection_id: firstCol.id,
+      item_id: firstCol.items[0]?.id || "",
+      x_value: 0,
+      stage_mode: currentProject.has_pd && currentProject.has_rd ? "pd_rd" : currentProject.has_rd ? "rd" : "pd",
+      completeness_pct: 100.0,
+      k_coeff: 1.0,
+      enabled: true,
+      adverse_period: true,
+      height_group: "h_up_to_6",
+      building_category: "II",
+      work_complexity: "II",
+      work_type: "obmer_plus_obsled",
+      small_volume_auto: true,
+    });
+    recalculateCostBackend();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Таблица 2А (В1): Независимый нормативный расчёт по Методике № 707/пр (Табл. 1.3)
+// ---------------------------------------------------------------------------
+function renderLabor707RowsTable(cp) {
+  const tbody = document.getElementById("labor707RowsTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  const rows = cp.labor_707_rows || [];
+  const t13List = (normativeCatalog && normativeCatalog.method_707_table_1_3) || [];
+
+  rows.forEach((r, idx) => {
+    const tr = document.createElement("tr");
+    tr.className = `hover:bg-indigo-50/40 transition ${!r.enabled ? "opacity-50 bg-slate-50" : ""}`;
+
+    const roleOptions = t13List
+      .map(
+        (item) =>
+          `<option value="${item.id}" ${item.id === r.role_id ? "selected" : ""}>${item.role} (И_i = ${Number(item.index_i).toFixed(2)})</option>`
+      )
+      .join("");
+
+    tr.innerHTML = `
+      <td class="py-2 px-3 text-center">
+        <input type="checkbox" class="l707-row-chk w-4 h-4 text-indigo-600 rounded" data-idx="${idx}" ${r.enabled ? "checked" : ""}>
+      </td>
+      <td class="py-2 px-3">
+        <select class="l707-row-role-sel w-full text-xs font-medium border border-slate-300 rounded px-2 py-1 bg-white text-slate-800" data-idx="${idx}">
+          ${roleOptions}
+          <option value="custom" ${!t13List.some((x) => x.id === r.role_id) ? "selected" : ""}>Своя должность...</option>
+        </select>
+      </td>
+      <td class="py-2 px-3">
+        <input type="text" class="l707-row-dep w-full text-xs text-slate-600 border border-slate-200 rounded px-2 py-1 bg-white" data-idx="${idx}" value="${r.department || ""}">
+      </td>
+      <td class="py-2 px-3 text-center">
+        <input type="number" min="1" max="50" class="l707-row-cnt w-16 text-center font-mono text-xs border border-slate-300 rounded px-1 py-1 bg-white" data-idx="${idx}" value="${r.count}">
+      </td>
+      <td class="py-2 px-3 text-center">
+        <input type="number" step="0.5" min="0.5" class="l707-row-days w-20 text-center font-mono text-xs border border-slate-300 rounded px-1 py-1 bg-white" data-idx="${idx}" value="${r.days}">
+      </td>
+      <td class="py-2 px-3 text-center font-mono font-bold text-slate-700">${r.total_days || 0}</td>
+      <td class="py-2 px-3 text-center">
+        <input type="number" step="0.01" min="0.2" max="4.0" class="l707-row-idx w-20 text-center font-mono font-bold text-xs border border-indigo-300 rounded px-1 py-1 bg-white text-indigo-900" data-idx="${idx}" value="${r.index_i}">
+      </td>
+      <td class="py-2 px-3 text-right font-mono font-semibold text-indigo-800">${Number(r.weighted_days || 0).toFixed(2)}</td>
+      <td class="py-2 px-3 text-right font-mono font-bold text-emerald-700">${formatRub(r.cost_rub)}</td>
+      <td class="py-2 px-2 text-center">
+        <button type="button" class="l707-row-del text-slate-400 hover:text-rose-600" data-idx="${idx}"><i class="fa-solid fa-xmark"></i></button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".l707-row-chk").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-role-sel").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const roleId = e.target.value;
+      const found = t13List.find((x) => x.id === roleId);
+      rows[idx].role_id = roleId;
+      if (found) {
+        rows[idx].role_name = found.role;
+        rows[idx].department = found.department || rows[idx].department;
+        rows[idx].index_i = found.index_i;
+      }
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-dep").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].department = e.target.value;
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-cnt").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].count = parseInt(e.target.value, 10) || 1;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-days").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].days = parseFloat(e.target.value) || 1;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-idx").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].index_i = parseFloat(e.target.value) || 1.0;
+      recalculateCostBackend();
+    });
+  });
+
+  tbody.querySelectorAll(".l707-row-del").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      rows.splice(parseInt(e.currentTarget.dataset.idx, 10), 1);
+      recalculateCostBackend();
+    });
+  });
+}
+
+const btnAddLabor707Row = document.getElementById("btnAddLabor707Row");
+if (btnAddLabor707Row) {
+  btnAddLabor707Row.addEventListener("click", () => {
+    if (!currentProject || !currentProject.cost_parameters) return;
+    currentProject.cost_parameters.labor_707_rows = currentProject.cost_parameters.labor_707_rows || [];
+    currentProject.cost_parameters.labor_707_rows.push({
+      row_id: "l707_" + Date.now(),
+      role_id: "t13_7",
+      role_name: "Ведущий специалист: инженер, архитектор, экономист, сметчик (Табл. 1.3 п. 7)",
+      department: "Профильные отделы",
+      count: 1,
+      days: 10,
+      index_i: 1.0,
+      enabled: true,
+    });
+    recalculateCostBackend();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Таблица 2Б (В2): Независимый коммерческий расчёт по рыночной стоимости (г. Тюмень)
+// ---------------------------------------------------------------------------
+function renderSpecialistRowsTable(cp) {
+  const tbody = document.getElementById("specialistRowsTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  const rows = cp.specialist_rows || [];
+  const specDir = (normativeCatalog && normativeCatalog.specialists_directory) || [];
+
+  rows.forEach((s, idx) => {
+    const tr = document.createElement("tr");
+    tr.className = `hover:bg-teal-50/40 transition ${!s.enabled ? "opacity-50 bg-slate-50" : ""}`;
+
+    const roleOptions = specDir
+      .map(
+        (item) =>
+          `<option value="${item.id}" ${item.id === s.role_id ? "selected" : ""}>${item.role} (${Number(item.monthly_salary_rub).toLocaleString("ru-RU")} ₽/мес)</option>`
+      )
+      .join("");
+
+    tr.innerHTML = `
+      <td class="py-2 px-3 text-center">
+        <input type="checkbox" class="spec-row-chk w-4 h-4 text-teal-600 rounded" data-idx="${idx}" ${s.enabled ? "checked" : ""}>
+      </td>
+      <td class="py-2 px-3">
+        <select class="spec-row-role-sel w-full text-xs font-medium border border-slate-300 rounded px-2 py-1 bg-white text-slate-800" data-idx="${idx}">
+          ${roleOptions}
+          <option value="custom" ${!specDir.some((x) => x.id === s.role_id) ? "selected" : ""}>${s.role_name || "Своя должность..."}</option>
+        </select>
+      </td>
+      <td class="py-2 px-3">
+        <input type="text" class="spec-row-dep w-full text-xs text-slate-600 border border-slate-200 rounded px-2 py-1 bg-white" data-idx="${idx}" value="${s.department}">
+      </td>
+      <td class="py-2 px-3 text-center">
+        <input type="number" min="1" max="50" class="spec-row-cnt w-16 text-center font-mono text-xs border border-slate-300 rounded px-1 py-1 bg-white" data-idx="${idx}" value="${s.count}">
+      </td>
+      <td class="py-2 px-3 text-center">
+        <input type="number" step="0.5" min="0.5" class="spec-row-days w-20 text-center font-mono text-xs border border-slate-300 rounded px-1 py-1 bg-white" data-idx="${idx}" value="${s.days}">
+      </td>
+      <td class="py-2 px-3 text-center font-mono font-bold text-slate-700">${s.total_days || 0}</td>
+      <td class="py-2 px-3 text-right">
+        <input type="number" step="1000" class="spec-row-sal w-28 text-right font-mono font-bold text-xs border border-teal-300 rounded px-2 py-1 bg-white text-teal-950" data-idx="${idx}" value="${s.monthly_salary_rub}">
+      </td>
+      <td class="py-2 px-3 text-right font-mono text-slate-600">${formatRub(s.daily_rate_rub)}</td>
+      <td class="py-2 px-3 text-right font-mono font-bold text-emerald-700">${formatRub(s.total_wage_rub)}</td>
+      <td class="py-2 px-2 text-center">
+        <button type="button" class="spec-row-del text-slate-400 hover:text-rose-600" data-idx="${idx}"><i class="fa-solid fa-xmark"></i></button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".spec-row-chk").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      recalculateCostBackend();
+    });
+  });
+  tbody.querySelectorAll(".spec-row-role-sel").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const roleId = e.target.value;
+      const found = specDir.find((x) => x.id === roleId);
+      rows[idx].role_id = roleId;
+      if (found) {
+        rows[idx].role_name = found.role;
+        rows[idx].department = found.department || rows[idx].department;
+        rows[idx].monthly_salary_rub = found.monthly_salary_rub;
+      }
+      recalculateCostBackend();
+    });
+  });
+  tbody.querySelectorAll(".spec-row-dep").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].department = e.target.value;
+    });
+  });
+  tbody.querySelectorAll(".spec-row-cnt").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].count = parseInt(e.target.value, 10) || 1;
+      recalculateCostBackend();
+    });
+  });
+  tbody.querySelectorAll(".spec-row-days").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].days = parseFloat(e.target.value) || 1;
+      recalculateCostBackend();
+    });
+  });
+  tbody.querySelectorAll(".spec-row-sal").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      rows[parseInt(e.target.dataset.idx, 10)].monthly_salary_rub = parseFloat(e.target.value) || 80000;
+      recalculateCostBackend();
+    });
+  });
+  tbody.querySelectorAll(".spec-row-del").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      rows.splice(parseInt(e.currentTarget.dataset.idx, 10), 1);
+      recalculateCostBackend();
+    });
+  });
+}
+
+const btnAddSpecialistRow = document.getElementById("btnAddSpecialistRow");
+if (btnAddSpecialistRow) {
+  btnAddSpecialistRow.addEventListener("click", () => {
+    if (!currentProject || !currentProject.cost_parameters) return;
+    currentProject.cost_parameters.specialist_rows.push({
+      row_id: "spec_" + Date.now(),
+      role_id: "eng_1",
+      role_name: "Инженер-проектировщик I категории",
+      department: "Профильный отдел",
+      count: 1,
+      days: 10,
+      monthly_salary_rub: 95000,
+      qual_coeff_707: 1.0,
+      enabled: true,
+    });
+    recalculateCostBackend();
+  });
+}
+
+function renderAdditionalWorksBlock(cp) {
+  const container = document.getElementById("additionalWorksContainer");
+  if (!container) return;
+  container.innerHTML = "";
+
+  (cp.additional_works || []).forEach((aw, idx) => {
+    const card = document.createElement("div");
+    card.className = `rounded-lg border p-3 transition ${aw.enabled ? "bg-emerald-50/70 border-emerald-300" : "bg-white border-slate-200"}`;
+    card.innerHTML = `
+      <div class="flex items-start justify-between gap-2">
+        <label class="inline-flex items-start cursor-pointer font-semibold text-slate-800">
+          <input type="checkbox" class="add-work-chk w-4 h-4 text-emerald-600 rounded mt-0.5 mr-2" data-idx="${idx}" ${aw.enabled ? "checked" : ""}>
+          <span>${aw.name}</span>
+        </label>
+      </div>
+      <div class="mt-2 flex items-center justify-between gap-2">
+        <span class="text-[11px] text-slate-500">Сумма без НДС, ₽:</span>
+        <input type="number" step="5000" min="0" class="add-work-cost w-32 text-right font-mono font-bold text-xs border border-slate-300 rounded px-2 py-1 bg-white" data-idx="${idx}" value="${aw.cost_net_rub}">
+      </div>
+    `;
+    container.appendChild(card);
+  });
+
+  container.querySelectorAll(".add-work-chk").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      cp.additional_works[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      recalculateCostBackend();
+    });
+  });
+  container.querySelectorAll(".add-work-cost").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      cp.additional_works[parseInt(e.target.dataset.idx, 10)].cost_net_rub = parseFloat(e.target.value) || 0;
+      recalculateCostBackend();
+    });
+  });
+}
+
+function renderCostSectionsTable(cp) {
+  const tbody = document.getElementById("costSectionsTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  (cp.sections_costs || []).forEach((sec, idx) => {
+    if (!sec.enabled) return;
+    const tr = document.createElement("tr");
+    tr.className = "hover:bg-blue-50/30 transition";
+    const stBadge =
+      sec.stage === "Р"
+        ? `<span class="bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded font-bold text-[10px]">Р</span>`
+        : sec.stage === "П"
+        ? `<span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold text-[10px]">П</span>`
+        : `<span class="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold text-[10px]">П+Р</span>`;
+
+    tr.innerHTML = `
+      <td class="py-2 px-3 text-center">${stBadge}</td>
+      <td class="py-2 px-3 text-center font-mono text-slate-600">${sec.volume_num || ""}</td>
+      <td class="py-2 px-3 text-center font-mono font-bold text-blue-700">${sec.full_code || sec.code_mark}</td>
+      <td class="py-2 px-3 font-medium text-slate-800">${sec.title}</td>
+      <td class="py-2 px-3">
+        <input type="text" class="cost-sec-dep w-full text-xs text-slate-600 border border-transparent hover:border-slate-300 rounded px-1.5 py-0.5 bg-transparent focus:bg-white" data-idx="${idx}" value="${sec.department || ""}">
+      </td>
+      <td class="py-2 px-3 text-right">
+        <input type="number" step="0.5" min="0" max="100" class="cost-sec-share w-20 text-right font-mono font-semibold text-xs border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}" value="${sec.relative_share_percent}">
+      </td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">${sec.labor_days}</td>
+      <td class="py-2 px-3 text-right font-mono font-bold text-slate-900">${formatRub(sec.cost_rub)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".cost-sec-dep").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      cp.sections_costs[parseInt(e.target.dataset.idx, 10)].department = e.target.value;
+    });
+  });
+
+  tbody.querySelectorAll(".cost-sec-share").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      cp.sections_costs[parseInt(e.target.dataset.idx, 10)].relative_share_percent = parseFloat(e.target.value) || 0;
+      recalculateCostBackend();
+    });
+  });
+}
+
+// Слушатели верхних контролов вкладки 3
+document.querySelectorAll(".cost-method-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!currentProject || !currentProject.cost_parameters) return;
+    currentProject.cost_parameters.calculation_method = btn.dataset.method;
+    recalculateCostBackend();
+  });
+});
+
+[
+  "selectVatMode",
+  "inputSmrMln",
+  "chkCostReconstr",
+  "chkCostBim",
+  "inpCostComplexity",
+  "inpCostUrgency",
+  "inpRegionalSalary707",
+  "inpWorkDays707",
+  "inpK3SalaryShare707",
+  "inpProfitability707Pct",
+  "inpWorkDaysMarket",
+  "inpOverheadPct",
+  "inpProfitPct",
+  "chkSplitPdRdCost",
+].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener("change", () => recalculateCostBackend());
+  }
+});
+
+const btnNormalizeShares = document.getElementById("btnNormalizeShares");
+if (btnNormalizeShares) {
+  btnNormalizeShares.addEventListener("click", () => recalculateCostBackend());
+}
+
+// Скачивание сметного расчёта ПИР (.xlsx)
+const btnDownloadCostExcel = document.getElementById("btnDownloadCostExcel");
+if (btnDownloadCostExcel) {
+  btnDownloadCostExcel.addEventListener("click", async () => {
+    if (!currentProject) return;
+    syncProjectFromInputs();
+    syncCostInputsToModel();
+
+    const origHtml = btnDownloadCostExcel.innerHTML;
+    btnDownloadCostExcel.disabled = true;
+    btnDownloadCostExcel.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Формирование сметы...';
+    try {
+      const res = await fetch("/api/generate-cost-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(currentProject),
+      });
+      if (!res.ok) throw new Error("Не удалось сформировать Excel-смету");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      let fname = "Смета_ПИР.xlsx";
+      if (currentMode === "contract" && currentProject.cipher) {
+        fname = `${currentProject.cipher}_Смета_ПИР.xlsx`;
+      }
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Ошибка: " + e.message);
+    } finally {
+      btnDownloadCostExcel.disabled = false;
+      btnDownloadCostExcel.innerHTML = origHtml;
+    }
+  });
+}

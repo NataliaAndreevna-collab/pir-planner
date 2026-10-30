@@ -17,6 +17,64 @@ from app.services.pp87_rules import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Разбор ТЗ, оформленного таблицей «№ | Поле | Значение»
+# (текст, скопированный из Word с табуляцией, либо результат extract_text_from_docx со знаком « | »)
+# ---------------------------------------------------------------------------
+
+_ROW_START_RE = re.compile(
+    r"^[ \t]*(\d{1,2})[ \t]*(?:\t|[ ]\|[ ])[ \t]*([^\t|\n]{2,120}?)[ \t]*(?:\t|[ ]\|[ ])[ \t]*(.*)$"
+)
+
+_ROW_NONUM_RE = re.compile(r"^[ \t]*([^\t|\n]{2,120}?)[ \t]*(?:\t|[ ]\|[ ])[ \t]*(.*)$")
+
+_TZ_KEY_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "customer": ("заказчик",),
+    "contractor": ("подрядчик", "исполнитель", "генпроектировщик", "генеральный проектировщик"),
+    "object": ("объект", "наименование объекта", "объект проектирования", "объект строительства"),
+    "stage": ("стадийность", "стадия проектирования", "стадии проектирования"),
+    "basis": ("основание для проектирования", "основание"),
+}
+
+
+def _alias_name(key: str) -> str:
+    """Возвращает внутреннее имя поля ТЗ-таблицы по её названию или пустую строку."""
+    k = (key or "").lower().strip(" :.")
+    for name, aliases in _TZ_KEY_ALIASES.items():
+        if any(k == a or k.startswith(a + " ") for a in aliases):
+            return name
+    return ""
+
+
+def parse_tz_table_fields(raw_text: str) -> Dict[str, str]:
+    """
+    Разбирает ТЗ, оформленное таблицей «№ | Поле | Значение», и возвращает словарь
+    {customer, contractor, object, stage, basis} (только найденные поля).
+    Строки без номера в начале считаются продолжением значения предыдущей строки таблицы.
+    Если таблицы в тексте нет — возвращается пустой словарь.
+    """
+    rows: List[List[str]] = []
+    for line in (raw_text or "").splitlines():
+        m = _ROW_START_RE.match(line)
+        if m:
+            rows.append([m.group(2).strip(), m.group(3).strip()])
+            continue
+        # Строка без номера (номер мог потеряться при копировании из Word): принимаем,
+        # только если название поля совпадает с известным ключом.
+        m2 = _ROW_NONUM_RE.match(line)
+        if m2 and _alias_name(m2.group(1)):
+            rows.append([m2.group(1).strip(), m2.group(2).strip()])
+        elif rows and line.strip():
+            rows[-1][1] = (rows[-1][1] + "\n" + line.strip()).strip()
+
+    fields: Dict[str, str] = {}
+    for key, value in rows:
+        name = _alias_name(key)
+        if name and name not in fields:
+            fields[name] = value
+    return fields
+
+
 def extract_text_from_docx(file_bytes: bytes) -> str:
     """Извлекает текст из docx (абзацы и таблицы)."""
     try:
@@ -264,7 +322,7 @@ RD_MARK_PATTERNS: Dict[str, List[str]] = {
         r"железобетонн\w+\s+конструкци\w*",
     ],
     "rd_km": [
-        r"(?<![а-яёa-z0-9])км(?![а-яёa-z0-9])",
+        r"(?<![а-яёa-z0-9])(?<!\d\s)км(?![а-яёa-z0-9])",  # «5 км» и «5км» - это километры, а не марка КМ
         r"конструкци\w+\s+металлическ\w*",
         r"металлическ\w+\s+конструкци\w*",
     ],
@@ -470,7 +528,7 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
     ))
     # Точное определение стадии проектирования из заголовков таблицы ТЗ
     stage_row_match = re.search(
-        r"(?:^|\n)[\|\s0-9\.\-]*\b(?:стади[ияюйн\w]*|вид\s+работ)\s*(?:проектирования)?\b[\t\|:\-– ]*([^\n\r\|]{2,120})",
+        r"(?:^|\n)[\|\s0-9\.\-]*\bстади[ияюйн\w]*\s*(?:проектирования)?\b[\t\|:\-– ]*([^\n\r\|]{2,120})",
         text_lower
     )
     stage_header_text = stage_row_match.group(1).strip() if stage_row_match else ""
@@ -479,6 +537,16 @@ def _detect_stages_and_explicit_sections(raw_text: str, facility_type: FacilityT
         r"(?:пд\s*[\+,и\/]\s*рд|п\s*[\+,и\/]\s*р|проектн\w+\s*(?:и|\/)\s*рабоч\w+|две\s+стадии|в\s+2\s+стадии)",
         stage_header_text or text_lower
     ))
+    # В строке «Стадийность» названы обе стадии («Проектная документация и рабочая документация»,
+    # «ПД, РД») и нет ограничителей — это ПД + РД, а не «только РД» / «только ПД».
+    if (
+        not explicit_both_stages
+        and stage_header_text
+        and re.search(r"(?:проектн\w+\s+документац|(?<![а-яёa-z0-9])пд(?![а-яёa-z0-9]))", stage_header_text)
+        and re.search(r"(?:рабоч\w+\s+документац|(?<![а-яёa-z0-9])рд(?![а-яёa-z0-9]))", stage_header_text)
+        and not re.search(r"(?:только|без\s|не\s+(?:разрабатыва|требу)|на\s+основании|ранее\s+разработан)", stage_header_text)
+    ):
+        explicit_both_stages = True
 
     explicit_only_rd = (not explicit_both_stages) and bool(re.search(
         r"(?:рабочая\s+документация|\bрд\b|стади[ияю]\s*[«\"']?р[»\"']?(?:\b|$)|только\s+рабоч|без\s+проектн\w+\s+документац|на\s+основании\s+(?:ранее\s+разработанной\s+)?проектной)",
@@ -793,19 +861,23 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
       - 'ai': анализ через нейросеть (OpenRouter LLM) с подробными пояснениями.
     """
     object_name = "Строительство объекта"
+    table_fields = parse_tz_table_fields(raw_text)
+    table_object = clean_extracted_entity(table_fields.get("object", ""))
     match_obj = re.search(
         r"(?:по объекту|наименование объекта|объект проектирования|объект строительства)[\s:«\"'\-]+([^\n\r|]+)",
         raw_text,
         re.IGNORECASE,
     )
-    if match_obj:
+    if len(table_object) > 3:
+        object_name = table_object
+    elif match_obj:
         val = match_obj.group(1).strip()
         val = re.sub(r"^[«\"']|[»\"'.]+$", "", val).strip()
         if len(val) > 3:
             object_name = val
     else:
         match_constr = re.search(
-            r"((?:Строительство|Реконструкция|Капитальный ремонт|Техническое перевооружение|Проектирование)\s+[^\n\r\|]{4,90})",
+            r"((?:Строительство|Реконструкция|Капитальный ремонт|Техническое перевооружение|Проектирование)[ \t]+[^\n\r\|]{4,90})",
             raw_text,
             re.IGNORECASE,
         )
@@ -818,27 +890,34 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
         raw_text,
         re.IGNORECASE,
     )
-    if match_cust:
+    if table_fields.get("customer"):
+        customer = clean_extracted_entity(table_fields["customer"])
+    elif match_cust:
         customer = clean_extracted_entity(match_cust.group(1))
 
     contractor = ""
+    if table_fields.get("contractor"):
+        cand_tab = clean_extracted_entity(table_fields["contractor"])
+        if not re.search(r"^(?:не\s+требуется|нет|не\s+указан|\-+)$", cand_tab, re.IGNORECASE):
+            contractor = cand_tab
     match_gen = re.search(
         r"(?:Генпроектировщик|Генеральный\s+проектировщик)\s*(?:\|[^\n\r|]*\|)?\s*[:\-–|]\s*([^\n\r|]+)",
         raw_text,
         re.IGNORECASE,
     )
-    if match_gen:
+    if not contractor and match_gen:
         cand = clean_extracted_entity(match_gen.group(1))
         if not re.search(r"^(?:не\s+требуется|нет|не\s+указан|\-+)$", cand, re.IGNORECASE):
             contractor = cand
 
     contract_number = ""
     contract_date = ""
-    match_contract = re.search(
-        r"(?:Договор[а-я\s]*|контракт[а-я\s]*)№\s*([0-9А-Яа-яA-Za-z\/\-]+)(?:\s+от\s+([0-9\.\s\w«»г]+))?",
-        raw_text,
-        re.IGNORECASE,
-    )
+    contract_re = r"(?:Договор[а-я\s]*|контракт[а-я\s]*)№\s*([0-9А-Яа-яA-Za-z\/\-]+)(?:\s+от\s+([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{2,4}\s*г?\.?))?"
+    match_contract = None
+    if table_fields.get("basis"):
+        match_contract = re.search(contract_re, table_fields["basis"], re.IGNORECASE)
+    if not match_contract:
+        match_contract = re.search(contract_re, raw_text, re.IGNORECASE)
     if match_contract:
         contract_number = match_contract.group(1).strip()
         if match_contract.group(2):
