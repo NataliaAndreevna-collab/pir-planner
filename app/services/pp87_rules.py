@@ -630,6 +630,7 @@ def build_schedule(project: ProjectData, detail: Optional[str] = None) -> List[S
 
     after_expertise: List[int] = []
     pd_release: Optional[int] = None
+    last: List[int] = []  # цепочка последних этапов стадии П; пусто, если ПД не разрабатывается (только РД)
 
     # -----------------------------------------------------------------------
     # Этап 3. Разработка проектной документации (стадия ПД)
