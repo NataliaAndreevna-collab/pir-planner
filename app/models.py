@@ -15,12 +15,100 @@ class FacilityType(str, Enum):
 
 
 class CalculationMethod(str, Enum):
-    PERCENT_SHARE = "percent_share"  # По долям разделов (СБЦ / Методика 707/пр)
-    LABOR_EFFORT = "labor_effort"    # По трудозатратам специалистов (Форма 3П)
+    BY_COLLECTIONS = "by_collections"  # 1. По сборникам базовых цен (МНЗ / СБЦП)
+    LABOR_707 = "labor_707"            # 2 (В1). По трудозатратам (Форма 3П — строго по Методике № 707/пр)
+    LABOR_INTERNAL = "labor_internal"  # 2 (В2). По трудозатратам (Форма 3П — внутренний справочник ставок)
+    FROM_SMR = "from_smr"              # 3. От стоимости строительства (СМР) по табл. 1.5 Методики № 707/пр
+    PERCENT_SHARE = "percent_share"    # Обратная совместимость: от целевой суммы по долям разделов
+    LABOR_EFFORT = "labor_effort"      # Обратная совместимость: общая оценка по ч-д
+
+
+class CollectionQuoteItem(BaseModel):
+    """Отдельная расценка (позиция) из сборника МНЗ / СБЦП в сметном расчёте."""
+    row_id: str = "item_1"
+    collection_id: str = "mnz_53"      # ID сборника из normative_catalog
+    item_id: str = "53_t1_p1"          # ID расценки в сборнике
+    custom_name: str = ""              # Уточнение наименования (необязательно)
+    x_value: float = 0.0               # Значение основного показателя X (м3/сут, км, м2, м3 и т.д.) — вводится вручную; 0 = не задан
+    stage_mode: str = "pd_rd"          # "pd" (только П), "rd" (только Р), "pd_rd" (П + Р вместе)
+    completeness_pct: float = 100.0    # Доля разрабатываемых разделов от полного комплекса по сборнику (К_разд), %
+    k_coeff: float = 1.0               # Поправочный коэффициент (реконструкция, сейсмика, условия и т.д.)
+    enabled: bool = True
+
+    # Специальные поля для сборника № 8 (МНЗ № 283/пр — Обследование сетей ИТО)
+    adverse_period: bool = True        # Неблагоприятный период года для Тюменской области (+19% к полевым работам)
+
+    # Специальные поля для сборника № 9 (СБЦП № 270/пр — Обмерные работы и обследование зданий)
+    height_group: str = "h_up_to_6"    # Высотная группа здания (h_up_to_4 .. h_over_21)
+    building_category: str = "II"      # Категория сложности здания: "I", "II", "III"
+    work_complexity: str = "II"        # Категория сложности работ: "I", "II", "III"
+    work_type: str = "obmer_plus_obsled"  # "obmer", "obsled", "obmer_plus_obsled"
+    small_volume_auto: bool = True     # Автоматический повышающий коэф. табл. 11 при V <= 5000 м3
+
+    # Происхождение позиции и значения X (этап Б: подбор через ИИ с проверкой человеком)
+    source_description: str = ""       # Объект/сооружение из ТЗ, для которого подобрана позиция
+    ai_reason: str = ""                # Пояснение ИИ, почему выбрана позиция
+    x_source: str = ""                 # "" (не задан) | "manual" | "ai" | "min_default"
+    x_note: str = ""                   # Как получено X: цитата, перевод единиц или пометка «не указано в ТЗ»
+    needs_ai: bool = False             # Требуется (повторный) точечный запрос X: новая строка или изменён сборник/таблица
+
+    # Вычисляемые выходные поля расценки
+    warning: str = ""                  # Предупреждение по строке (не задан X, не найден сборник/таблица и т.п.)
+    collection_code: str = ""
+    item_name: str = ""
+    unit: str = ""
+    calc_type: str = "ab"              # "ab" | "survey_283" | "obmer_270"
+    price_level_year: int = 2024
+    index_type: str = "pir"            # "pir" | "survey"
+    index_applied: float = 1.0
+    formula_text: str = ""             # Строка формулы с подставленными числами и коэффициентами
+    base_cost_rub: float = 0.0         # Стоимость в базовом уровне цен, руб.
+    current_cost_rub: float = 0.0      # Стоимость в текущем уровне цен без НДС, руб.
+
+
+class Labor707Row(BaseModel):
+    """Строка нормативного расчёта по трудозатратам строго по Методике Минстроя РФ № 707/пр (п. 143–149, Табл. 1.3 Прил. 2, Форма 3П)."""
+    row_id: str = "l707_1"
+    role_id: str = "lead"
+    role_name: str = "Ведущий специалист (инженер, архитектор, экономист, сметчик)"
+    department: str = "Проектный отдел"
+    count: int = 1                     # Численность исполнителей Ч_i
+    days: float = 10.0                 # Трудозатраты 1 исполнителя Т_фi, раб. дн.
+    index_i: float = 1.00              # Индекс среднемесячной ЗП И_i по Табл. 1.3 Прил. 2 Методики № 707/пр
+    total_days: float = 0.0            # Ч_i * Т_фi, чел.-дн.
+    weighted_days: float = 0.0         # Ч_i * Т_фi * И_i, приведённых чел.-дн.
+    cost_rub: float = 0.0              # Стоимость по позиции (В_ср * Ч_i * Т_фi * И_i), руб. без НДС
+    enabled: bool = True
+
+
+class SpecialistLaborRow(BaseModel):
+    """Строка коммерческой калькуляции трудозатрат по рыночной стоимости специалистов в г. Тюмени."""
+    row_id: str = "spec_1"
+    role_id: str = "lead"
+    role_name: str = "Ведущий инженер-проектировщик"
+    department: str = "Проектный отдел"
+    count: int = 1                     # Количество специалистов данной категории
+    days: float = 10.0                 # Трудозатраты на 1 специалиста, чел.-дней
+    monthly_salary_rub: float = 115000.0  # Рыночный оклад из справочника Тюмени (для В2)
+    qual_coeff_707: float = 1.00       # Совместимость со старым полем
+    daily_rate_rub: float = 0.0        # Вычисленная дневная ставка ЗП, руб./день
+    total_days: float = 0.0            # Всего чел.-дней по строке (count * days)
+    total_wage_rub: float = 0.0        # Прямой ФОТ по строке, руб.
+    enabled: bool = True
+
+
+class AdditionalWorkItem(BaseModel):
+    """Дополнительный вид работ (обследование, изыскания, экспертиза / достоверность)."""
+    work_id: str                       # "inspection" | "surveys" | "expertise"
+    name: str
+    enabled: bool = False
+    cost_net_rub: float = 0.0          # Стоимость без НДС, руб.
+    note: str = ""
 
 
 class SectionCostItem(BaseModel):
     section_id: str
+    stage: str = "П+Р"                 # "П+Р" (единый расчёт), "П" или "Р" (при раздельном расчёте)
     volume_num: str
     code_mark: str
     full_code: str = ""
@@ -28,16 +116,18 @@ class SectionCostItem(BaseModel):
     relative_share_percent: float = 0.0  # Доля тома в проекте, %
     labor_days: float = 0.0              # Трудоемкость в человеко-днях
     cost_rub: float = 0.0                # Стоимость разработки без НДС, руб.
+    cost_pd_rub: float = 0.0             # В т.ч. стадия П, руб. (справочно или при раздельном расчёте)
+    cost_rd_rub: float = 0.0             # В т.ч. стадия Р, руб. (справочно или при раздельном расчёте)
     department: str = ""                 # Проектный отдел / подразделение
     lead_specialist: str = ""            # Ответственный специалист
     enabled: bool = True
 
 
 class CostParameters(BaseModel):
-    calculation_method: CalculationMethod = CalculationMethod.PERCENT_SHARE
-    target_total_cost_net: float = 3000000.0  # Базовая целевая стоимость ПИР без НДС, руб.
+    calculation_method: CalculationMethod = CalculationMethod.BY_COLLECTIONS
+    target_total_cost_net: float = 0.0        # Целевая стоимость ПИР без НДС, руб. (только для метода «по долям»; скрытой суммы по умолчанию нет)
     include_vat: bool = True                  # Учитывать НДС
-    vat_rate: float = 5.0                     # Ставка НДС, % (5 или 20; без НДС - include_vat=False)
+    vat_rate: float = 5.0                     # Ставка НДС, % (0, 5 или 22; с 01.01.2026 общая ставка 22%)
     average_daily_rate_rub: float = 12000.0   # Средняя дневная ставка специалиста, руб./день
     overhead_percent: float = 60.0            # Накладные расходы, %
     profit_percent: float = 20.0              # Сметная прибыль, %
@@ -45,14 +135,68 @@ class CostParameters(BaseModel):
     is_reconstruction: bool = False           # Реконструкция (К=1.20)
     use_bim: bool = False                     # Применение ТИМ/BIM технологий (К=1.15)
     urgency_factor: float = 1.0               # Коэффициент срочности
+
+    # Настройка объединения / разделения стадий П и Р в расчёте стоимости
+    # По умолчанию False: П и Р считаются вместе (без дублирования строк), галочкой можно разделить
+    split_pd_rd_in_cost: bool = False
+    pd_stage_share_pct: float = 40.0          # Доля стадии П (%), по умолчанию 40%
+    rd_stage_share_pct: float = 60.0          # Доля стадии Р (%), по умолчанию 60%
+
+    # 1. Позиции расчёта по сборникам МНЗ / СБЦП (Форма 2П)
+    collection_items: List[CollectionQuoteItem] = Field(default_factory=list)
+    collections_total_net_rub: float = 0.0    # Независимый итог по сборникам МНЗ/СБЦП без НДС, руб.
+
+    # 2А (В1). Независимый нормативный расчёт по трудозатратам строго по Методике № 707/пр (п. 143–149, ф. 8.12–8.14, Табл. 1.1–1.3)
+    regional_monthly_salary_707: float = 95000.0  # ЗП_мес по региону (Тюменская обл.) для Методики № 707/пр
+    work_days_707: float = 20.6                   # Д_раб по Табл. 1.1 Прил. 2 Методики № 707/пр
+    k3_salary_share_707: float = 0.4006           # К_3 — доля прямой ЗП в себестоимости (40,06% по Табл. 1.1 Прил. 2 № 707/пр)
+    profitability_707: float = 0.10               # Р — уровень рентабельности (10% по Табл. 1.2 Прил. 2 № 707/пр)
+    v_sr_707_rub: float = 0.0                     # Среднедневная выработка В_ср = (ЗП_мес / Д_раб) * (1 + Р) / К_3, руб./чел.-дн.
+    k_kv_uch_707: float = 1.0                     # Коэффициент квалификации-участия К_кв-уч = sum(Ч_i * Т_фi * И_i) / sum(Ч_i * Т_фi)
+    labor_707_total_days: float = 0.0             # Суммарные трудозатраты sum(Ч_i * Т_фi) по расчёту 707/пр, чел.-дн.
+    labor_707_weighted_days: float = 0.0          # Приведённые трудозатраты sum(Ч_i * Т_фi * И_i), чел.-дн.
+    labor_707_total_net_rub: float = 0.0          # Независимый итог по Методике № 707/пр без НДС, руб.
+    labor_707_formula_text: str = ""              # Строка расчёта по ф. (8.12)–(8.14) Методики № 707/пр
+    labor_707_rows: List[Labor707Row] = Field(default_factory=list)
+    labor_rows_auto: bool = True                  # Таблицы трудозатрат строятся по составу разделов; False после ручной правки
+    labor_norms_approved: bool = False            # Нормы чел.-дн. по разделам утверждены пользователем (data/labor_norms.json)
+    labor_total_days_norm: float = 0.0            # Всего чел.-дн. по нормам для выбранных разделов
+
+    # 2Б (В2). Независимый коммерческий расчёт по таблице рыночной стоимости специалистов (г. Тюмень)
+    work_days_per_month: float = 21.0             # Среднемесячное число рабочих дней для рыночного расчёта
+    specialist_rows: List[SpecialistLaborRow] = Field(default_factory=list)
+    labor_market_total_days: float = 0.0          # Суммарные трудозатраты по рыночной таблице, чел.-дн.
+    labor_market_direct_wage_rub: float = 0.0     # Прямой ФОТ по рыночным окладам Тюмени, руб.
+    labor_market_overhead_rub: float = 0.0        # Накладные расходы рыночного расчёта, руб.
+    labor_market_profit_rub: float = 0.0          # Прибыль рыночного расчёта, руб.
+    labor_market_total_net_rub: float = 0.0       # Независимый итог по таблице рыночной стоимости без НДС, руб.
+    labor_market_formula_text: str = ""           # Строка пояснения рыночного расчёта
+
+    # 3. Параметры расчёта от стоимости строительства (СМР) по Методике № 707/пр (Табл. 1.5 Прил. 2)
+    smr_cost_mln_rub: float = 0.0             # Ориентировочная стоимость строительства (СМР), млн руб. без НДС
+    smr_object_category: str = "other"        # "industrial" | "civil" | "utilities" | "roads" | "other"
+    smr_normative_pct: float = 0.0            # Вычисленный норматив % ПИР от СМР
+    smr_reference_pir_cost_rub: float = 0.0   # Справочная стоимость ПИР от СМР без НДС, руб.
+    smr_detected_from_tz: bool = False        # Была ли стоимость СМР найдена автоматически в ТЗ
+
+    # 4. Дополнительные виды работ (обследование, ИИ, экспертиза/достоверность)
+    additional_works: List[AdditionalWorkItem] = Field(default_factory=list)
+    additional_works_total_net_rub: float = 0.0
+
+    # Предупреждения расчёта (показываются в интерфейсе и в тексте сметы)
+    warnings: List[str] = Field(default_factory=list)
+    ai_notes: List[str] = Field(default_factory=list)  # Заметки последнего ИИ-подбора (нет позиции в справочнике, X не найден и т.п.)
+
+    # Распределение по разделам проекта
     sections_costs: List[SectionCostItem] = Field(default_factory=list)
 
     # Итоговые расчетные показатели
+    pir_only_cost_net_rub: float = 0.0        # Стоимость основных проектных работ (ПД/РД) без доп. работ, руб.
     total_labor_days: float = 0.0             # Всего человеко-дней
     direct_labor_cost_rub: float = 0.0        # Прямые затраты на ФОТ
     overhead_rub: float = 0.0                 # Накладные расходы, руб.
     profit_rub: float = 0.0                   # Сметная прибыль, руб.
-    total_cost_net_rub: float = 0.0           # Итого без НДС, руб.
+    total_cost_net_rub: float = 0.0           # Итого без НДС (включая включенные доп. работы), руб.
     vat_rub: float = 0.0                      # Сумма НДС, руб.
     total_cost_gross_rub: float = 0.0         # Итого с НДС, руб.
 
@@ -136,7 +280,8 @@ class KPPriceFormat(str, Enum):
 
 
 class KPStage(str, Enum):
-    PD = "pd"                # Проектная документация
+    PD = "pd"                # Проектная документация (ПД)
+    RD = "rd"                # Рабочая документация (РД)
     PD_RD = "pd_rd"          # Проектная и рабочая документация
     CHANGES = "changes"      # Внесение изменений в проектную документацию
 

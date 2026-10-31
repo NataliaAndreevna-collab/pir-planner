@@ -1,7 +1,8 @@
+import datetime
 import os
 import urllib.parse
-from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from typing import Any, Dict, Optional
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +13,12 @@ from app.services.docx_generator import generate_docx_sostav
 from app.services.estimate_excel_generator import generate_estimate_excel
 from app.services.kp_generator import generate_kp_docx, get_letterhead_path
 from app.services.excel_generator import generate_excel_schedule
+from app.services.normative_catalog import (
+    check_indices_staleness,
+    ensure_catalog_file,
+    parse_uploaded_collection_file,
+    save_catalog,
+)
 from app.services.pp87_rules import (
     apply_volume_ciphers,
     build_rd_sections,
@@ -21,6 +28,8 @@ from app.services.pp87_rules import (
     resolve_schedule,
 )
 from app.services.tz_parser import apply_tz_to_sections, extract_text_from_docx, extract_text_from_pdf, parse_tz_content
+from app.services.masking import mask_for_ai
+from app.services.ai_cost import fill_x_values, suggest_collection_items
 
 app = FastAPI(
     title="ПИР Генератор: Состав проекта и График работ",
@@ -47,17 +56,8 @@ def read_root():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
-@app.post("/api/parse-tz", response_model=ParseTZResponse)
-async def parse_tz_endpoint(
-    text: str = Form(default=""),
-    file: UploadFile = File(default=None),
-    engine: str = Form(default="local"),
-):
-    """
-    Парсит ТЗ из загруженного файла (.docx, .pdf, .txt) или переданного текста.
-    Параметр engine: 'local' (мгновенный по нормативам) или 'ai' (нейросеть).
-    Возвращает предварительно заполненные параметры проекта и состав разделов.
-    """
+async def _read_raw_tz(text: str, file: Optional[UploadFile]) -> str:
+    """Собирает текст ТЗ из поля формы и/или загруженного файла (.docx, .pdf, .txt)."""
     raw_text = text
 
     if file and file.filename:
@@ -74,6 +74,50 @@ async def parse_tz_endpoint(
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Не передан текст или файл ТЗ для анализа")
+
+    return raw_text
+
+
+@app.post("/api/preview-ai-payload")
+async def preview_ai_payload_endpoint(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+):
+    """
+    Служебный эндпоинт проверки: показывает, какой текст уйдёт в нейросеть после маскирования,
+    и список замен. Ничего никуда не отправляет. Открыть можно на странице /docs.
+    """
+    raw_text = await _read_raw_tz(text, file)
+    project_data, _ = parse_tz_content(raw_text, engine="local")
+    masked = mask_for_ai(
+        raw_text,
+        customer=project_data.customer,
+        contractor=project_data.contractor,
+        contract_number=project_data.contract_number,
+        contract_date=project_data.contract_date,
+        object_name=project_data.object_name,
+    )
+    return {
+        "masked_text": masked.text,
+        "replacements_count": len(masked.replacements),
+        "summary": masked.summary(),
+        "replacements": masked.replacements,
+        "warning": "Фильтр работает по шаблонам и не даёт гарантии: проверьте текст глазами.",
+    }
+
+
+@app.post("/api/parse-tz", response_model=ParseTZResponse)
+async def parse_tz_endpoint(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+    engine: str = Form(default="local"),
+):
+    """
+    Парсит ТЗ из загруженного файла (.docx, .pdf, .txt) или переданного текста.
+    Параметр engine: 'local' (мгновенный по нормативам) или 'ai' (нейросеть).
+    Возвращает предварительно заполненные параметры проекта и состав разделов.
+    """
+    raw_text = await _read_raw_tz(text, file)
 
     project_data, detected_features = parse_tz_content(raw_text, engine=engine)
     return ParseTZResponse(project_data=project_data, detected_features=detected_features)
@@ -131,6 +175,7 @@ def apply_preset_endpoint(data: ProjectData, preset: str):
     data.schedule_flags = flags
     apply_volume_ciphers(data)
     data.schedule_phases = build_schedule(data, detail=data.schedule_detail)
+    sync_cost_with_sections(data)
     return data
 
 
@@ -161,6 +206,7 @@ def switch_facility_type(data: ProjectData, facility_type: FacilityType):
 
     apply_volume_ciphers(data)
     data.schedule_phases = build_schedule(data, detail=data.schedule_detail)
+    sync_cost_with_sections(data)
     return data
 
 
@@ -172,9 +218,46 @@ def calculate_cost_endpoint(data: ProjectData):
     """
     apply_volume_ciphers(data)
     if data.cost_parameters:
-        recalculate_cost_parameters(data.cost_parameters)
+        sync_cost_with_sections(data)
     else:
         data.cost_parameters = init_cost_parameters(data)
+    return data
+
+
+@app.post("/api/ai-suggest-collections", response_model=ProjectData)
+def ai_suggest_collections_endpoint(data: ProjectData):
+    """
+    Этап Б, запрос 1: нейросеть находит в ТЗ объекты и подбирает для них позиции справочника (без значения X).
+    В нейросеть уходит только замаскированный текст. Выполняется по явной кнопке пользователя.
+    """
+    apply_volume_ciphers(data)
+    if not data.cost_parameters:
+        data.cost_parameters = init_cost_parameters(data)
+    catalog = ensure_catalog_file()
+    new_items, notes, err = suggest_collection_items(data, catalog)
+    if err:
+        raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
+    data.cost_parameters.collection_items.extend(new_items)
+    data.cost_parameters.ai_notes = notes + ([f"Добавлено позиций: {len(new_items)}. Проверьте подбор и при необходимости измените сборник/таблицу."] if new_items else [])
+    recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
+    return data
+
+
+@app.post("/api/ai-fill-x", response_model=ProjectData)
+def ai_fill_x_endpoint(data: ProjectData):
+    """
+    Этап Б, запрос 2: нейросеть ищет в ТЗ значение X только для строк, где оно не определено.
+    Значения, введённые вручную, не запрашиваются. Выполняется по явной кнопке пользователя.
+    """
+    apply_volume_ciphers(data)
+    if not data.cost_parameters:
+        data.cost_parameters = init_cost_parameters(data)
+    catalog = ensure_catalog_file()
+    done, notes, err = fill_x_values(data, catalog)
+    if err:
+        raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
+    data.cost_parameters.ai_notes = ([f"Обработано строк: {done}."] if done else []) + notes
+    recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     return data
 
 
@@ -185,7 +268,7 @@ def generate_cost_excel_endpoint(data: ProjectData):
     """
     apply_volume_ciphers(data)
     if data.cost_parameters:
-        recalculate_cost_parameters(data.cost_parameters)
+        recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     else:
         data.cost_parameters = init_cost_parameters(data)
 
@@ -272,6 +355,88 @@ def kp_info():
     return {"corporate_letterhead": get_letterhead_path() is not None}
 
 
+@app.get("/api/normative-catalog")
+def get_normative_catalog_endpoint():
+    """
+    Возвращает базу нормативов: 15 сборников МНЗ/СБЦП, квартальные индексы Минстроя РФ
+    с проверкой актуальности (3 месяца) и ссылкой на КонсультантПлюс, справочник специалистов
+    по Тюменской области и таблицу нормативов от СМР по Методике № 707/пр.
+    """
+    catalog = ensure_catalog_file()
+    indices = catalog.get("indices", {})
+    staleness = check_indices_staleness(indices.get("updated_at", "2026-07-23"))
+    return {
+        "catalog": catalog,
+        "staleness": staleness,
+    }
+
+
+@app.post("/api/update-indices")
+def update_indices_endpoint(payload: Dict[str, Any] = Body(...)):
+    """
+    Сохраняет обновленные пользователем квартальные индексы Минстроя РФ
+    и фиксирует дату актуализации (сегодня).
+    """
+    catalog = ensure_catalog_file()
+    indices = catalog.setdefault("indices", {})
+    if "period_label" in payload:
+        indices["period_label"] = str(payload["period_label"]).strip()
+    if "letter_ref" in payload:
+        indices["letter_ref"] = str(payload["letter_ref"]).strip()
+    if "smr_to_2001_index" in payload:
+        indices["smr_to_2001_index"] = float(payload["smr_to_2001_index"])
+    if isinstance(payload.get("pir"), dict):
+        for k, v in payload["pir"].items():
+            indices.setdefault("pir", {})[str(k)] = float(v)
+    if isinstance(payload.get("survey"), dict):
+        for k, v in payload["survey"].items():
+            indices.setdefault("survey", {})[str(k)] = float(v)
+
+    indices["updated_at"] = datetime.date.today().isoformat()
+    save_catalog(catalog)
+    staleness = check_indices_staleness(indices["updated_at"])
+    return {"catalog": catalog, "staleness": staleness}
+
+
+@app.post("/api/update-specialists")
+def update_specialists_endpoint(payload: Dict[str, Any] = Body(...)):
+    """
+    Сохраняет изменения в справочнике специалистов и среднемесячную ЗП по региону (для Методики № 707/пр).
+    """
+    catalog = ensure_catalog_file()
+    if "regional_salary_707_rub" in payload:
+        catalog["regional_salary_707_rub"] = float(payload["regional_salary_707_rub"])
+    if "working_days_per_month" in payload:
+        catalog["working_days_per_month"] = float(payload["working_days_per_month"])
+    if isinstance(payload.get("specialists_directory"), list):
+        catalog["specialists_directory"] = payload["specialists_directory"]
+    save_catalog(catalog)
+    return {"catalog": catalog}
+
+
+@app.post("/api/upload-collection")
+async def upload_collection_endpoint(file: UploadFile = File(...)):
+    """
+    Принимает файл сборника (.docx или .pdf), автоматически извлекает базовый уровень цен
+    и табличные параметры расценок и пополняет базу data/normative_catalog.json.
+    """
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Файл сборника не выбран")
+    content = await file.read()
+    try:
+        added_col = parse_uploaded_collection_file(content, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка разбора файла сборника: {e}")
+
+    catalog = ensure_catalog_file()
+    return {
+        "added_collection": added_col,
+        "catalog": catalog,
+    }
+
+
 @app.post("/api/generate-kp")
 def generate_kp_endpoint(req: KPRequest):
     """
@@ -280,7 +445,7 @@ def generate_kp_endpoint(req: KPRequest):
     data = req.project
     apply_volume_ciphers(data)
     if data.cost_parameters:
-        recalculate_cost_parameters(data.cost_parameters)
+        recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     else:
         data.cost_parameters = init_cost_parameters(data)
 
