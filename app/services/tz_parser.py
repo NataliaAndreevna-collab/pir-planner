@@ -1009,8 +1009,10 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
             "ots": any(s.id == "ots" and s.enabled for s in pd_sections),
             "surveys": bool(llm_result.get("has_surveys", False)),
             "survey_types": "ИГДИ, ИГИ, ИЭИ",
-            "internal_expertise": True,
-            "expertise": True,
+            # Этапы экспертизы в графике следуют ответу нейросети (раньше всегда были True).
+            # Если нейросеть поле не вернула, остаётся прежнее поведение по умолчанию (включено).
+            "internal_expertise": bool(llm_result.get("has_expertise", True)),
+            "expertise": bool(llm_result.get("has_expertise", True)),
             "permit": False,
             "techplan": False,
         }

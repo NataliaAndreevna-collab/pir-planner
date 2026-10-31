@@ -121,3 +121,20 @@ def test_prompt_does_not_ask_for_identity_fields():
 
     for field in ('"customer"', '"contractor"', '"contract_number"', '"object_name"'):
         assert field not in SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("answer,expected", [(False, False), (True, True), (None, True)])
+def test_ai_expertise_flags_follow_ai_answer(monkeypatch, answer, expected):
+    from app.services.pp87_rules import build_schedule
+
+    with open(os.path.join(FIXTURES, "tz_tec1_rd_only.txt"), encoding="utf-8") as f:
+        raw = f.read()
+    result = {"has_pd": False, "has_rd": True, "composition_preset": "tz", "pd_sections": [], "rd_marks": ["rd_as", "rd_km"],
+              "facility_type": "capital", "has_surveys": False}
+    if answer is not None:
+        result["has_expertise"] = answer
+    monkeypatch.setattr(tz_parser, "query_llm_tz_analysis", lambda text, model_name=None: (dict(result), None))
+    project, _ = parse_tz_content(raw, engine="ai")
+    assert project.schedule_flags["expertise"] is expected
+    assert project.schedule_flags["internal_expertise"] is expected
+    assert len(build_schedule(project)) > 0  # график строится при любом значении флагов
