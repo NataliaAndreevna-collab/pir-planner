@@ -29,6 +29,7 @@ from app.services.pp87_rules import (
 )
 from app.services.tz_parser import apply_tz_to_sections, extract_text_from_docx, extract_text_from_pdf, parse_tz_content
 from app.services.masking import mask_for_ai
+from app.services.ai_cost import fill_x_values, suggest_collection_items
 
 app = FastAPI(
     title="ПИР Генератор: Состав проекта и График работ",
@@ -220,6 +221,43 @@ def calculate_cost_endpoint(data: ProjectData):
         sync_cost_with_sections(data)
     else:
         data.cost_parameters = init_cost_parameters(data)
+    return data
+
+
+@app.post("/api/ai-suggest-collections", response_model=ProjectData)
+def ai_suggest_collections_endpoint(data: ProjectData):
+    """
+    Этап Б, запрос 1: нейросеть находит в ТЗ объекты и подбирает для них позиции справочника (без значения X).
+    В нейросеть уходит только замаскированный текст. Выполняется по явной кнопке пользователя.
+    """
+    apply_volume_ciphers(data)
+    if not data.cost_parameters:
+        data.cost_parameters = init_cost_parameters(data)
+    catalog = ensure_catalog_file()
+    new_items, notes, err = suggest_collection_items(data, catalog)
+    if err:
+        raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
+    data.cost_parameters.collection_items.extend(new_items)
+    data.cost_parameters.ai_notes = notes + ([f"Добавлено позиций: {len(new_items)}. Проверьте подбор и при необходимости измените сборник/таблицу."] if new_items else [])
+    recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
+    return data
+
+
+@app.post("/api/ai-fill-x", response_model=ProjectData)
+def ai_fill_x_endpoint(data: ProjectData):
+    """
+    Этап Б, запрос 2: нейросеть ищет в ТЗ значение X только для строк, где оно не определено.
+    Значения, введённые вручную, не запрашиваются. Выполняется по явной кнопке пользователя.
+    """
+    apply_volume_ciphers(data)
+    if not data.cost_parameters:
+        data.cost_parameters = init_cost_parameters(data)
+    catalog = ensure_catalog_file()
+    done, notes, err = fill_x_values(data, catalog)
+    if err:
+        raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
+    data.cost_parameters.ai_notes = ([f"Обработано строк: {done}."] if done else []) + notes
+    recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     return data
 
 

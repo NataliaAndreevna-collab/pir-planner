@@ -564,10 +564,19 @@
                 </h3>
                 <p class="text-[11px] text-slate-500">Учитывает натуральный показатель X, стадийность (П, Р, П+Р), полноту разрабатываемых разделов (К_разд, %) и квартальный индекс Минстроя РФ</p>
               </div>
-              <button id="btnAddCollectionRow" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
-                <i class="fa-solid fa-plus mr-1.5"></i> Добавить позицию из сборника
-              </button>
+              <div class="flex flex-wrap gap-2">
+                <button id="btnAiSuggestCollections" type="button" title="В нейросеть уходит текст ТЗ с замаскированными реквизитами" class="bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
+                  <i class="fa-solid fa-robot mr-1.5"></i> Подобрать позиции по ТЗ (ИИ)
+                </button>
+                <button id="btnAiFillX" type="button" title="Ищет X только для строк, где оно ещё не определено; введённые вручную значения не трогает" class="bg-violet-100 hover:bg-violet-200 text-violet-900 text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
+                  <i class="fa-solid fa-magnifying-glass mr-1.5"></i> Найти X в ТЗ (ИИ)
+                </button>
+                <button id="btnAddCollectionRow" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
+                  <i class="fa-solid fa-plus mr-1.5"></i> Добавить позицию из сборника
+                </button>
+              </div>
             </div>
+            <div id="aiNotesBox" class="hidden bg-violet-50 border border-violet-300 rounded-lg p-3 text-xs text-violet-900 space-y-1 mt-2"></div>
 
             <div class="overflow-x-auto">
               <table class="w-full text-left text-xs divide-y divide-slate-200">

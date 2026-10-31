@@ -213,3 +213,65 @@ def query_llm_tz_analysis(tz_text: str, model_name: Optional[str] = None) -> Tup
             continue
 
     return None, last_error
+
+
+def query_llm_json(
+    system_prompt: str,
+    user_message: str,
+    required_key: str,
+    max_tokens: int = 3000,
+    model_name: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Универсальный запрос к нейросети через OpenRouter с ответом в JSON.
+    Возвращает (dict, None) либо (None, описание_ошибки). Ответ считается корректным, только если в нём есть required_key.
+    Текст в user_message должен быть уже замаскирован (app/services/masking.py).
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return None, "В конфигурации (.env) не найден OPENROUTER_API_KEY."
+
+    models_to_try = [model_name] if model_name else DEFAULT_MODELS
+    last_error = ""
+    for m in models_to_try:
+        if not m:
+            continue
+        try:
+            req_data = {
+                "model": m,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": 0.0,
+                "max_tokens": max_tokens,
+            }
+            req = urllib.request.Request(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://pir-planner.local",
+                    "X-Title": "PIR Planner AI",
+                },
+                data=json.dumps(req_data).encode("utf-8"),
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp_json = json.loads(resp.read().decode("utf-8"))
+            choices = resp_json.get("choices", [])
+            if not choices:
+                last_error = f"Модель {m}: {resp_json.get('error', {}).get('message', 'пустой ответ')}"
+                continue
+            content = choices[0].get("message", {}).get("content", "")
+            if not content:
+                last_error = f"Модель {m} вернула пустой контент."
+                continue
+            parsed = json.loads(clean_json_response(content))
+            if isinstance(parsed, dict) and required_key in parsed:
+                return parsed, None
+            last_error = f"Модель {m} вернула некорректный JSON."
+        except urllib.error.HTTPError as he:
+            last_error = f"Ошибка OpenRouter HTTP {he.code} ({m}): {he.read().decode('utf-8', errors='ignore')[:200]}"
+        except Exception as e:
+            last_error = f"Ошибка запроса к {m}: {str(e)}"
+    return None, last_error

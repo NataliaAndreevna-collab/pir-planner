@@ -45,6 +45,13 @@ class CollectionQuoteItem(BaseModel):
     work_type: str = "obmer_plus_obsled"  # "obmer", "obsled", "obmer_plus_obsled"
     small_volume_auto: bool = True     # Автоматический повышающий коэф. табл. 11 при V <= 5000 м3
 
+    # Происхождение позиции и значения X (этап Б: подбор через ИИ с проверкой человеком)
+    source_description: str = ""       # Объект/сооружение из ТЗ, для которого подобрана позиция
+    ai_reason: str = ""                # Пояснение ИИ, почему выбрана позиция
+    x_source: str = ""                 # "" (не задан) | "manual" | "ai" | "min_default"
+    x_note: str = ""                   # Как получено X: цитата, перевод единиц или пометка «не указано в ТЗ»
+    needs_ai: bool = False             # Требуется (повторный) точечный запрос X: новая строка или изменён сборник/таблица
+
     # Вычисляемые выходные поля расценки
     warning: str = ""                  # Предупреждение по строке (не задан X, не найден сборник/таблица и т.п.)
     collection_code: str = ""
@@ -178,6 +185,7 @@ class CostParameters(BaseModel):
 
     # Предупреждения расчёта (показываются в интерфейсе и в тексте сметы)
     warnings: List[str] = Field(default_factory=list)
+    ai_notes: List[str] = Field(default_factory=list)  # Заметки последнего ИИ-подбора (нет позиции в справочнике, X не найден и т.п.)
 
     # Распределение по разделам проекта
     sections_costs: List[SectionCostItem] = Field(default_factory=list)

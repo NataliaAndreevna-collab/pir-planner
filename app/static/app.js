@@ -1810,6 +1810,77 @@ async function recalculateCostBackend() {
   }
 }
 
+function escHtml(v) {
+  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function markNeedsAi(item) {
+  // Изменили сборник/таблицу: прежнее X больше не подходит, требуется повторный запрос (или ручной ввод)
+  item.x_value = 0;
+  item.x_source = "";
+  item.x_note = "";
+  item.needs_ai = true;
+}
+
+function xSourceBadge(q) {
+  if (q.x_source === "ai") {
+    return `<span class="block text-[10px] text-blue-700 mt-1" title="${escHtml(q.x_note)}">✓ из ТЗ (ИИ): ${escHtml(q.x_note)}</span>`;
+  }
+  if (q.x_source === "min_default") {
+    return `<span class="block text-[10px] text-amber-700 font-semibold mt-1">⚠ ${escHtml(q.x_note)}</span>`;
+  }
+  if (q.x_source === "manual") {
+    return `<span class="block text-[10px] text-slate-500 mt-1">введено вручную</span>`;
+  }
+  if (q.needs_ai) {
+    return `<span class="block text-[10px] text-amber-700 mt-1">X ещё не определён</span>`;
+  }
+  return q.x_note ? `<span class="block text-[10px] text-amber-700 mt-1">${escHtml(q.x_note)}</span>` : "";
+}
+
+async function runAiCostStep(url, btn, busyLabel) {
+  if (!currentProject) return;
+  syncProjectFromInputs();
+  syncCostInputsToModel();
+  const box = document.getElementById("aiNotesBox");
+  const original = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1.5"></i> ${busyLabel}`;
+  }
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentProject),
+    });
+    if (res.ok) {
+      currentProject = await res.json();
+      renderCostTab();
+    } else {
+      let detail = "Ошибка запроса";
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch (e) {}
+      if (box) {
+        box.classList.remove("hidden");
+        box.innerHTML = `<div class="font-bold text-rose-700">${escHtml(detail)}</div>`;
+      }
+    }
+  } catch (e) {
+    console.error("Ошибка ИИ-запроса:", e);
+    if (box) {
+      box.classList.remove("hidden");
+      box.innerHTML = `<div class="font-bold text-rose-700">Не удалось выполнить запрос: ${escHtml(e.message || e)}</div>`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  }
+}
+
 let costInitInFlight = false;
 
 function clearCostTabView() {
@@ -1863,6 +1934,16 @@ function renderCostTab() {
   if (elVat) elVat.textContent = cp.include_vat ? formatRub(cp.vat_rub) : "Без НДС (0 ₽)";
   if (elGross) elGross.textContent = formatRub(cp.total_cost_gross_rub);
   if (elLaborSub) elLaborSub.textContent = `Расчётная трудоёмкость: ${cp.total_labor_days || 0} чел.-дней`;
+
+  const aiBox = document.getElementById("aiNotesBox");
+  if (aiBox) {
+    const notes = cp.ai_notes || [];
+    aiBox.classList.toggle("hidden", notes.length === 0);
+    aiBox.innerHTML = notes.length
+      ? '<div class="font-bold"><i class="fa-solid fa-robot mr-1.5"></i>Результат подбора ИИ (проверьте):</div>' +
+        notes.map((n) => `<div>• ${escHtml(n)}</div>`).join("")
+      : "";
+  }
 
   const warnBox = document.getElementById("costWarnings");
   if (warnBox) {
@@ -2050,11 +2131,14 @@ function renderCollectionItemsTable(cp) {
           ${itemOptions}
         </select>
         ${extraControlsHtml}
+        ${q.source_description ? `<span class="block text-[10px] text-blue-800 mt-1"><b>По ТЗ:</b> ${escHtml(q.source_description)}</span>` : ""}
+        ${q.ai_reason ? `<span class="block text-[10px] text-slate-500 mt-0.5">ИИ: ${escHtml(q.ai_reason)}</span>` : ""}
       </td>
       <td class="py-2.5 px-3 text-center align-top">
         <input type="number" step="any" min="0" class="col-item-x w-24 text-center font-mono font-bold text-xs border ${q.x_value > 0 ? "border-blue-300" : "border-amber-400 bg-amber-50"} rounded px-2 py-1 bg-white text-blue-900" data-idx="${idx}" value="${q.x_value > 0 ? q.x_value : ""}" placeholder="введите X">
         <span class="block text-[10px] text-slate-500 mt-1">${q.unit || "ед."}</span>
-        ${q.warning ? `<span class="block text-[10px] text-amber-700 font-semibold mt-1">${q.warning}</span>` : ""}
+        ${q.warning ? `<span class="block text-[10px] text-amber-700 font-semibold mt-1">${escHtml(q.warning)}</span>` : ""}
+        ${xSourceBadge(q)}
       </td>
       <td class="py-2.5 px-3 text-center align-top space-y-1">
         <select class="col-item-stage w-full text-[11px] font-semibold border border-slate-300 rounded px-1.5 py-0.5 bg-white" data-idx="${idx}">
@@ -2104,6 +2188,7 @@ function renderCollectionItemsTable(cp) {
       if (foundCol && foundCol.items && foundCol.items.length) {
         items[idx].item_id = foundCol.items[0].id;
       }
+      markNeedsAi(items[idx]);
       recalculateCostBackend();
     });
   });
@@ -2112,6 +2197,7 @@ function renderCollectionItemsTable(cp) {
     el.addEventListener("change", (e) => {
       const idx = parseInt(e.target.dataset.idx, 10);
       items[idx].item_id = e.target.value;
+      markNeedsAi(items[idx]);
       recalculateCostBackend();
     });
   });
@@ -2120,6 +2206,9 @@ function renderCollectionItemsTable(cp) {
     el.addEventListener("change", (e) => {
       const idx = parseInt(e.target.dataset.idx, 10);
       items[idx].x_value = parseFloat(e.target.value) || 0;
+      items[idx].x_source = items[idx].x_value > 0 ? "manual" : "";
+      items[idx].x_note = items[idx].x_value > 0 ? "Введено вручную" : "";
+      items[idx].needs_ai = items[idx].x_value > 0 ? false : true;
       recalculateCostBackend();
     });
   });
@@ -2197,6 +2286,15 @@ function renderCollectionItemsTable(cp) {
   });
 }
 
+const btnAiSuggest = document.getElementById("btnAiSuggestCollections");
+if (btnAiSuggest) {
+  btnAiSuggest.addEventListener("click", () => runAiCostStep("/api/ai-suggest-collections", btnAiSuggest, "Подбираю позиции…"));
+}
+const btnAiFillX = document.getElementById("btnAiFillX");
+if (btnAiFillX) {
+  btnAiFillX.addEventListener("click", () => runAiCostStep("/api/ai-fill-x", btnAiFillX, "Ищу X в ТЗ…"));
+}
+
 const btnAddCollectionRow = document.getElementById("btnAddCollectionRow");
 if (btnAddCollectionRow) {
   btnAddCollectionRow.addEventListener("click", () => {
@@ -2208,6 +2306,11 @@ if (btnAddCollectionRow) {
       collection_id: firstCol.id,
       item_id: firstCol.items[0]?.id || "",
       x_value: 0,
+      needs_ai: true,
+      x_source: "",
+      x_note: "",
+      source_description: "",
+      ai_reason: "",
       stage_mode: currentProject.has_pd && currentProject.has_rd ? "pd_rd" : currentProject.has_rd ? "rd" : "pd",
       completeness_pct: 100.0,
       k_coeff: 1.0,

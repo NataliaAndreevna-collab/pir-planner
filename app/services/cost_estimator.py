@@ -890,6 +890,16 @@ def recalculate_cost_parameters(
             collections_sum_rub += q_item.current_cost_rub
             if q_item.warning:
                 warnings.append(f"Позиция «{q_item.item_name or q_item.item_id}»: {q_item.warning}")
+            if q_item.x_source == "min_default" and not q_item.warning:
+                warnings.append(
+                    f"Позиция «{q_item.source_description or q_item.item_name or q_item.item_id}»: данные не указаны в ТЗ, "
+                    f"взято минимальное значение X = {q_item.x_value:g} {q_item.unit} — уточните у заказчика."
+                )
+            if q_item.needs_ai and q_item.x_source != "manual":
+                warnings.append(
+                    f"Позиция «{q_item.source_description or q_item.item_name or q_item.item_id}»: значение X ещё не определено — "
+                    "нажмите «Найти X в ТЗ (ИИ)» или введите вручную."
+                )
     collections_sum_rub = round(collections_sum_rub, 2)
     cost_params.collections_total_net_rub = collections_sum_rub
 
