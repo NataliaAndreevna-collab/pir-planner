@@ -28,6 +28,7 @@ from app.services.pp87_rules import (
     resolve_schedule,
 )
 from app.services.tz_parser import apply_tz_to_sections, extract_text_from_docx, extract_text_from_pdf, parse_tz_content
+from app.services.masking import mask_for_ai
 
 app = FastAPI(
     title="ПИР Генератор: Состав проекта и График работ",
@@ -54,17 +55,8 @@ def read_root():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
-@app.post("/api/parse-tz", response_model=ParseTZResponse)
-async def parse_tz_endpoint(
-    text: str = Form(default=""),
-    file: UploadFile = File(default=None),
-    engine: str = Form(default="local"),
-):
-    """
-    Парсит ТЗ из загруженного файла (.docx, .pdf, .txt) или переданного текста.
-    Параметр engine: 'local' (мгновенный по нормативам) или 'ai' (нейросеть).
-    Возвращает предварительно заполненные параметры проекта и состав разделов.
-    """
+async def _read_raw_tz(text: str, file: Optional[UploadFile]) -> str:
+    """Собирает текст ТЗ из поля формы и/или загруженного файла (.docx, .pdf, .txt)."""
     raw_text = text
 
     if file and file.filename:
@@ -81,6 +73,50 @@ async def parse_tz_endpoint(
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Не передан текст или файл ТЗ для анализа")
+
+    return raw_text
+
+
+@app.post("/api/preview-ai-payload")
+async def preview_ai_payload_endpoint(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+):
+    """
+    Служебный эндпоинт проверки: показывает, какой текст уйдёт в нейросеть после маскирования,
+    и список замен. Ничего никуда не отправляет. Открыть можно на странице /docs.
+    """
+    raw_text = await _read_raw_tz(text, file)
+    project_data, _ = parse_tz_content(raw_text, engine="local")
+    masked = mask_for_ai(
+        raw_text,
+        customer=project_data.customer,
+        contractor=project_data.contractor,
+        contract_number=project_data.contract_number,
+        contract_date=project_data.contract_date,
+        object_name=project_data.object_name,
+    )
+    return {
+        "masked_text": masked.text,
+        "replacements_count": len(masked.replacements),
+        "summary": masked.summary(),
+        "replacements": masked.replacements,
+        "warning": "Фильтр работает по шаблонам и не даёт гарантии: проверьте текст глазами.",
+    }
+
+
+@app.post("/api/parse-tz", response_model=ParseTZResponse)
+async def parse_tz_endpoint(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+    engine: str = Form(default="local"),
+):
+    """
+    Парсит ТЗ из загруженного файла (.docx, .pdf, .txt) или переданного текста.
+    Параметр engine: 'local' (мгновенный по нормативам) или 'ai' (нейросеть).
+    Возвращает предварительно заполненные параметры проекта и состав разделов.
+    """
+    raw_text = await _read_raw_tz(text, file)
 
     project_data, detected_features = parse_tz_content(raw_text, engine=engine)
     return ParseTZResponse(project_data=project_data, detected_features=detected_features)

@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from fastapi import HTTPException
 from app.models import FacilityType, ProjectData, ProjectMode, SectionItem
 from app.services.llm_parser import query_llm_tz_analysis
+from app.services.masking import mask_for_ai
 from app.services.pp87_rules import (
     RD_CATALOG,
     apply_volume_ciphers,
@@ -942,7 +943,16 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
 
     llm_result = None
     if engine == "ai":
-        llm_result, llm_error = query_llm_tz_analysis(raw_text)
+        # В нейросеть уходит только замаскированный текст (заказчик, подрядчик, договор, объект, ФИО, адреса, реквизиты).
+        masked = mask_for_ai(
+            raw_text,
+            customer=customer,
+            contractor=contractor,
+            contract_number=contract_number,
+            contract_date=contract_date,
+            object_name=object_name,
+        )
+        llm_result, llm_error = query_llm_tz_analysis(masked.text)
         if not llm_result:
             # Пользователь специально нажал AI, поэтому не подменяем молча на внутренний расчет,
             # а сообщаем точную причину ошибки!
@@ -954,16 +964,7 @@ def parse_tz_content(raw_text: str, engine: str = "local") -> Tuple[ProjectData,
         if llm_result.get("explanation"):
             detected_features.append(f"AI пояснение: {llm_result['explanation']}")
 
-        if llm_result.get("object_name") and len(llm_result["object_name"].strip()) > 3:
-            object_name = llm_result["object_name"].strip()
-        if llm_result.get("customer"):
-            customer = clean_extracted_entity(llm_result["customer"])
-        if llm_result.get("contractor"):
-            contractor = clean_extracted_entity(llm_result["contractor"])
-        if llm_result.get("contract_number"):
-            contract_number = llm_result["contract_number"].strip()
-        if llm_result.get("contract_date"):
-            contract_date = llm_result["contract_date"].strip()
+        # Название объекта, заказчик, подрядчик и договор остаются из локального разбора: нейросеть их не видела.
 
         fac_str = str(llm_result.get("facility_type", "")).lower()
         if fac_str == "linear":
