@@ -1,3 +1,5 @@
+import json
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from app.models import (
@@ -584,22 +586,37 @@ def suggest_initial_collection_items(project_data: ProjectData, catalog: Dict[st
     return []
 
 
-def build_default_labor_707_rows(catalog: Dict[str, Any]) -> List[Labor707Row]:
+def load_labor_norms() -> Dict[str, Any]:
+    """Читает data/labor_norms.json (черновые нормы чел.-дн. по разделам, см. поле approved)."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "labor_norms.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"approved": False, "default_days_per_section": 8.0, "days_per_section": {}, "role_split_707": {}, "role_split_market": {}}
+
+
+def norm_total_days(project_data: Optional[ProjectData], norms: Dict[str, Any]) -> float:
+    """Сумма норм чел.-дн. по включённым разделам проекта. Без проекта/разделов возвращает 0."""
+    if project_data is None:
+        return 0.0
+    table = norms.get("days_per_section", {})
+    default = float(norms.get("default_days_per_section", 8.0))
+    return round(sum(float(table.get(sec.id, default)) for sec in project_data.sections if sec.enabled), 1)
+
+
+def build_default_labor_707_rows(catalog: Dict[str, Any], project_data: Optional[ProjectData] = None) -> List[Labor707Row]:
     """
-    Формирует стартовый набор строк для НЕЗАВИСИМОГО расчёта В1 строго по Методике Минстроя РФ № 707/пр
-    (п. 143–149, Таблица 1.3 Приложения № 2 — официальные индексы среднемесячной ЗП И_i).
+    Стартовые строки расчёта В1 (Методика № 707/пр, п. 143–149, Табл. 1.3 Прил. 2: индексы И_i).
+    Дни определяются составом проекта: сумма норм по включённым разделам × доля роли.
+    Нормы черновые (data/labor_norms.json, approved=false). Без включённых разделов дни = 0.
     """
-    t13 = catalog.get("method_707_table_1_3", [])
-    t13_map = {r["id"]: r for r in t13}
-    defaults = [
-        ("t13_4", 1, 8.0),   # ГИП / ГАП (И_i = 1.60)
-        ("t13_5", 1, 10.0),  # Главный специалист (И_i = 1.32)
-        ("t13_7", 2, 14.0),  # Ведущий специалист (И_i = 1.00)
-        ("t13_8", 2, 14.0),  # Инженер I категории (И_i = 0.90)
-        ("t13_9", 1, 10.0),  # Инженер II категории (И_i = 0.75)
-    ]
+    norms = load_labor_norms()
+    total = norm_total_days(project_data, norms)
+    split = norms.get("role_split_707", {})
+    t13_map = {r["id"]: r for r in catalog.get("method_707_table_1_3", [])}
     rows: List[Labor707Row] = []
-    for idx, (role_id, cnt, days) in enumerate(defaults, 1):
+    for idx, (role_id, share) in enumerate(split.items(), 1):
         info = t13_map.get(role_id, {})
         rows.append(
             Labor707Row(
@@ -607,8 +624,8 @@ def build_default_labor_707_rows(catalog: Dict[str, Any]) -> List[Labor707Row]:
                 role_id=role_id,
                 role_name=info.get("role", "Ведущий специалист: инженер, архитектор, экономист, сметчик (Табл. 1.3 п. 7)"),
                 department=info.get("department", "Профильные отделы"),
-                count=cnt,
-                days=days,
+                count=1,
+                days=round(total * float(share), 1),
                 index_i=float(info.get("index_i", 1.00)),
                 enabled=True,
             )
@@ -616,22 +633,17 @@ def build_default_labor_707_rows(catalog: Dict[str, Any]) -> List[Labor707Row]:
     return rows
 
 
-def build_default_specialist_rows(catalog: Dict[str, Any]) -> List[SpecialistLaborRow]:
+def build_default_specialist_rows(catalog: Dict[str, Any], project_data: Optional[ProjectData] = None) -> List[SpecialistLaborRow]:
     """
-    Формирует стартовый набор строк для НЕЗАВИСИМОГО коммерческого расчёта В2
-    по таблице рыночной стоимости специалистов в г. Тюмени.
+    Стартовые строки расчёта В2 (рыночные оклады специалистов, г. Тюмень).
+    Дни определяются составом проекта так же, как в build_default_labor_707_rows.
     """
-    spec_dir = catalog.get("specialists_directory", [])
-    spec_map = {s["id"]: s for s in spec_dir}
-    defaults = [
-        ("gip", 1, 8.0),
-        ("lead", 2, 15.0),
-        ("eng_1", 2, 15.0),
-        ("sdo", 1, 8.0),
-        ("spec_pos_pb", 1, 10.0),
-    ]
+    norms = load_labor_norms()
+    total = norm_total_days(project_data, norms)
+    split = norms.get("role_split_market", {})
+    spec_map = {s["id"]: s for s in catalog.get("specialists_directory", [])}
     rows: List[SpecialistLaborRow] = []
-    for idx, (role_id, cnt, days) in enumerate(defaults, 1):
+    for idx, (role_id, share) in enumerate(split.items(), 1):
         info = spec_map.get(role_id, {})
         rows.append(
             SpecialistLaborRow(
@@ -639,8 +651,8 @@ def build_default_specialist_rows(catalog: Dict[str, Any]) -> List[SpecialistLab
                 role_id=role_id,
                 role_name=info.get("role", "Инженер-проектировщик"),
                 department=info.get("department", "Проектный отдел"),
-                count=cnt,
-                days=days,
+                count=1,
+                days=round(total * float(share), 1),
                 monthly_salary_rub=float(info.get("monthly_salary_rub", 95000.0)),
                 qual_coeff_707=float(info.get("k_qual_707", 1.0)),
                 enabled=True,
@@ -766,8 +778,8 @@ def init_cost_parameters(project_data: ProjectData) -> CostParameters:
     norm_707 = catalog.get("method_707_normatives", {})
     detected_smr = extract_smr_from_tz_text(project_data.tz_text or "")
     initial_collections = suggest_initial_collection_items(project_data, catalog)
-    initial_labor_707 = build_default_labor_707_rows(catalog)
-    initial_specialists = build_default_specialist_rows(catalog)
+    initial_labor_707 = build_default_labor_707_rows(catalog, project_data)
+    initial_specialists = build_default_specialist_rows(catalog, project_data)
     initial_add_works = build_default_additional_works(project_data)
     cost_items = _build_section_cost_items(project_data, split_pd_rd=False)
 
@@ -819,10 +831,10 @@ def sync_cost_with_sections(project_data: ProjectData) -> None:
     if not cost_params.collection_items:
         cost_params.collection_items = suggest_initial_collection_items(project_data, catalog)
 
-    if not cost_params.labor_707_rows:
-        cost_params.labor_707_rows = build_default_labor_707_rows(catalog)
-    if not cost_params.specialist_rows:
-        cost_params.specialist_rows = build_default_specialist_rows(catalog)
+    if cost_params.labor_rows_auto or not cost_params.labor_707_rows:
+        cost_params.labor_707_rows = build_default_labor_707_rows(catalog, project_data)
+    if cost_params.labor_rows_auto or not cost_params.specialist_rows:
+        cost_params.specialist_rows = build_default_specialist_rows(catalog, project_data)
     if not cost_params.additional_works:
         cost_params.additional_works = build_default_additional_works(project_data)
 
@@ -851,11 +863,17 @@ def recalculate_cost_parameters(
     catalog = ensure_catalog_file()
     warnings: List[str] = []
 
-    # Ensure both labor tables exist
-    if not cost_params.labor_707_rows:
-        cost_params.labor_707_rows = build_default_labor_707_rows(catalog)
-    if not cost_params.specialist_rows:
-        cost_params.specialist_rows = build_default_specialist_rows(catalog)
+    # Строки трудозатрат строит init/sync по составу разделов; здесь только предупреждение о черновых нормах
+    norms = load_labor_norms()
+    cost_params.labor_norms_approved = bool(norms.get("approved", False))
+    cost_params.labor_total_days_norm = round(
+        sum(max(float(r.days), 0.0) * max(int(r.count), 1) for r in cost_params.labor_707_rows if r.enabled), 1
+    )
+    if cost_params.labor_rows_auto and not cost_params.labor_norms_approved:
+        warnings.append(
+            "Трудозатраты (методы 2А и 2Б) рассчитаны по ориентировочным нормам человеко-дней на раздел "
+            "(data/labor_norms.json), они не утверждены: замените своими данными или отредактируйте таблицу вручную."
+        )
 
     # Общие мультипликаторы условий проектирования
     reconstr_k = 1.20 if cost_params.is_reconstruction else 1.0

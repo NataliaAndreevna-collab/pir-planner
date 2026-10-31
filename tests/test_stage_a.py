@@ -290,3 +290,50 @@ def test_additional_works_have_no_hidden_default_cost(tec1_cost):
     assert cp.additional_works_total_net_rub == 0
     assert cp.total_cost_net_rub == 0
     assert any("Дополнительная работа" in w for w in cp.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Трудозатраты зависят от состава проекта (раньше были одинаковыми для любого ТЗ)
+# ---------------------------------------------------------------------------
+
+def _labor_totals(project):
+    cp = init_cost_parameters(project)
+    return cp, cp.labor_707_total_net_rub, cp.labor_market_total_net_rub, cp.labor_707_total_days
+
+
+def test_labor_depends_on_project_composition():
+    rd_only = _with_stage("Рабочая документация")
+    both = _with_stage("Проектная и рабочая документация")
+    _, a707, amkt, adays = _labor_totals(rd_only)
+    _, b707, bmkt, bdays = _labor_totals(both)
+    assert adays > 0 and bdays > adays
+    assert b707 > a707 and bmkt > amkt
+
+
+def test_labor_zero_without_enabled_sections():
+    project = _with_stage("Рабочая документация")
+    for s in project.sections:
+        s.enabled = False
+    cp, n707, nmkt, days = _labor_totals(project)
+    assert days == 0 and n707 == 0 and nmkt == 0
+
+
+def test_labor_follows_sections_until_manual_edit(tec1_cost):
+    from app.services.cost_estimator import sync_cost_with_sections
+
+    cp = tec1_cost.cost_parameters
+    before = cp.labor_707_total_days
+    next(s for s in tec1_cost.sections if s.id == "rd_kzh").enabled = True
+    sync_cost_with_sections(tec1_cost)
+    assert cp.labor_707_total_days > before  # автоматический режим: добавили раздел, дни выросли
+
+    cp.labor_rows_auto = False  # пользователь правил таблицу
+    manual_days = cp.labor_707_total_days
+    next(s for s in tec1_cost.sections if s.id == "rd_kd").enabled = True
+    sync_cost_with_sections(tec1_cost)
+    assert cp.labor_707_total_days == manual_days  # ручную таблицу не перетираем
+
+
+def test_draft_norms_warning_is_shown(tec1_cost):
+    assert tec1_cost.cost_parameters.labor_norms_approved is False
+    assert any("ориентировочным нормам" in w for w in tec1_cost.cost_parameters.warnings)

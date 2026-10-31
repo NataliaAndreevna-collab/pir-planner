@@ -1786,6 +1786,11 @@ function syncCostInputsToModel() {
   if (chkSplit) cp.split_pd_rd_in_cost = chkSplit.checked;
 }
 
+function markLaborManual() {
+  // Пользователь правит таблицы трудозатрат: больше не пересобираем их автоматически по составу разделов
+  if (currentProject && currentProject.cost_parameters) currentProject.cost_parameters.labor_rows_auto = false;
+}
+
 async function recalculateCostBackend() {
   if (!currentProject) return;
   syncProjectFromInputs();
@@ -2275,6 +2280,7 @@ function renderLabor707RowsTable(cp) {
   tbody.querySelectorAll(".l707-row-chk").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2290,6 +2296,7 @@ function renderLabor707RowsTable(cp) {
         rows[idx].department = found.department || rows[idx].department;
         rows[idx].index_i = found.index_i;
       }
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2303,6 +2310,7 @@ function renderLabor707RowsTable(cp) {
   tbody.querySelectorAll(".l707-row-cnt").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].count = parseInt(e.target.value, 10) || 1;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2310,6 +2318,7 @@ function renderLabor707RowsTable(cp) {
   tbody.querySelectorAll(".l707-row-days").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].days = parseFloat(e.target.value) || 1;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2317,6 +2326,7 @@ function renderLabor707RowsTable(cp) {
   tbody.querySelectorAll(".l707-row-idx").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].index_i = parseFloat(e.target.value) || 1.0;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2324,6 +2334,7 @@ function renderLabor707RowsTable(cp) {
   tbody.querySelectorAll(".l707-row-del").forEach((el) => {
     el.addEventListener("click", (e) => {
       rows.splice(parseInt(e.currentTarget.dataset.idx, 10), 1);
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2344,6 +2355,7 @@ if (btnAddLabor707Row) {
       index_i: 1.0,
       enabled: true,
     });
+    markLaborManual();
     recalculateCostBackend();
   });
 }
@@ -2405,6 +2417,7 @@ function renderSpecialistRowsTable(cp) {
   tbody.querySelectorAll(".spec-row-chk").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].enabled = e.target.checked;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2419,6 +2432,7 @@ function renderSpecialistRowsTable(cp) {
         rows[idx].department = found.department || rows[idx].department;
         rows[idx].monthly_salary_rub = found.monthly_salary_rub;
       }
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2430,24 +2444,28 @@ function renderSpecialistRowsTable(cp) {
   tbody.querySelectorAll(".spec-row-cnt").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].count = parseInt(e.target.value, 10) || 1;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
   tbody.querySelectorAll(".spec-row-days").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].days = parseFloat(e.target.value) || 1;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
   tbody.querySelectorAll(".spec-row-sal").forEach((el) => {
     el.addEventListener("change", (e) => {
       rows[parseInt(e.target.dataset.idx, 10)].monthly_salary_rub = parseFloat(e.target.value) || 80000;
+      markLaborManual();
       recalculateCostBackend();
     });
   });
   tbody.querySelectorAll(".spec-row-del").forEach((el) => {
     el.addEventListener("click", (e) => {
       rows.splice(parseInt(e.currentTarget.dataset.idx, 10), 1);
+      markLaborManual();
       recalculateCostBackend();
     });
   });
@@ -2468,6 +2486,7 @@ if (btnAddSpecialistRow) {
       qual_coeff_707: 1.0,
       enabled: true,
     });
+    markLaborManual();
     recalculateCostBackend();
   });
 }

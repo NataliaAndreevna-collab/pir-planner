@@ -151,6 +151,9 @@ class CostParameters(BaseModel):
     labor_707_total_net_rub: float = 0.0          # Независимый итог по Методике № 707/пр без НДС, руб.
     labor_707_formula_text: str = ""              # Строка расчёта по ф. (8.12)–(8.14) Методики № 707/пр
     labor_707_rows: List[Labor707Row] = Field(default_factory=list)
+    labor_rows_auto: bool = True                  # Таблицы трудозатрат строятся по составу разделов; False после ручной правки
+    labor_norms_approved: bool = False            # Нормы чел.-дн. по разделам утверждены пользователем (data/labor_norms.json)
+    labor_total_days_norm: float = 0.0            # Всего чел.-дн. по нормам для выбранных разделов
 
     # 2Б (В2). Независимый коммерческий расчёт по таблице рыночной стоимости специалистов (г. Тюмень)
     work_days_per_month: float = 21.0             # Среднемесячное число рабочих дней для рыночного расчёта
