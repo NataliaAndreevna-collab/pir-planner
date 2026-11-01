@@ -183,50 +183,104 @@ def normalize_active_shares(items: List[SectionCostItem]) -> None:
 
 def _eval_ab_intervals(intervals: List[Dict[str, Any]], x_val: float) -> Tuple[float, float, float, str]:
     """
-    Вычисляет базовую стоимость по таблице интервалов (a, b) с учётом правил
-    интерполяции и экстраполяции (Методика Минстроя РФ № 707/пр):
-    - Внутри интервала [x_min, x_max]: C = a + b * X
-    - Ниже минимального показателя (X < X_min): C = a + b * (0.4 * X_min + 0.6 * X)
-      (а если b == 0: C = a * (0.4 + 0.6 * X / X_min))
-    - Выше максимального показателя (X > X_max): C = a + b * (0.4 * X_max + 0.6 * X)
+    Вычисляет базовую стоимость по таблице интервалов (a, b) с полным соблюдением
+    правил интерполяции и экстраполяции Методики Минстроя РФ № 707/пр (пп. 127–132, формулы 8.1–8.7):
+    
+    1. Внутри интервала [x_min, x_max]: 
+       Формула (8.1): C = a + b * X
+       
+    2. Ниже минимального показателя (X < X_min):
+       - Если 0.5 * X_min <= X < X_min:
+         Формула (8.2): C = a + b * (0.4 * X_min + 0.6 * X)
+         (при b == 0: C = a * (0.4 + 0.6 * X / X_min))
+       - Если X < 0.5 * X_min (меньше половины минимального):
+         Формулы (8.4) и (8.5):
+         K_экс = max(round(X / (0.5 * X_min), 4), 0.1)  # нормативный минимум 0.1
+         C = [a + b * (0.4 * X_min + 0.6 * 0.5 * X_min)] * K_экс
+         (при b == 0: C = a * (0.4 + 0.6 * 0.5) * K_экс = a * 0.7 * K_экс)
+         
+    3. Выше максимального показателя (X > X_max):
+       - Если X_max < X <= 2.0 * X_max:
+         Формула (8.3): C = a + b * (0.4 * X_max + 0.6 * X)
+         (при b == 0: C = a * (0.4 + 0.6 * X / X_max))
+       - Если X > 2.0 * X_max (больше удвоенного максимального):
+         Формулы (8.6) и (8.7):
+         K_экс = round(X / (2.0 * X_max), 4)
+         C = [a + b * (0.4 * X_max + 0.6 * 2.0 * X_max)] * K_экс
+         (при b == 0: C = a * (0.4 + 0.6 * 2.0) * K_экс = a * 1.6 * K_экс)
+         
     Возвращает (цена_табл, a, b, пояснение_формулы).
     """
     if not intervals:
         return 0.0, 0.0, 0.0, "0"
 
-    x = max(float(x_val), 0.001)
+    x = max(float(x_val), 0.000001)
     first = intervals[0]
     last = intervals[-1]
 
+    # --- СЛУЧАЙ 1: X МЕНЬШЕ МИНИМАЛЬНОГО (X < X_min) ---
     if x < float(first["x_min"]):
-        x_min = max(float(first["x_min"]), 0.001)
+        x_min = max(float(first["x_min"]), 0.000001)
         a = float(first["a"])
         b = float(first["b"])
-        if b > 0:
-            x_eff = 0.4 * x_min + 0.6 * x
-            val = a + b * x_eff
-            expr = f"({a:g} + {b:g} × (0,4×{x_min:g} + 0,6×{x:g})) [экстрап. X < {x_min:g}]"
+        x_half = 0.5 * x_min
+
+        if x >= x_half:
+            # Формула (8.2) Методики № 707/пр (диапазон 0.5 * X_min <= X < X_min)
+            if b > 0:
+                x_eff = 0.4 * x_min + 0.6 * x
+                val = a + b * x_eff
+                expr = f"({a:g} + {b:g} × (0,4×{x_min:g} + 0,6×{x:g})) [экстрап. ф. 8.2]"
+            else:
+                k_ext = 0.4 + 0.6 * (x / x_min)
+                val = a * k_ext
+                expr = f"({a:g} × (0,4 + 0,6×{x:g}/{x_min:g})) [экстрап. ф. 8.2]"
         else:
-            k_ext = max(0.4 + 0.6 * (x / x_min), 0.2)
-            val = a * k_ext
-            expr = f"({a:g} × (0,4 + 0,6×{x:g}/{x_min:g})) [экстрап. X < {x_min:g}]"
+            # Формулы (8.4) и (8.5) Методики № 707/пр (X < 0.5 * X_min, K_экс >= 0.1)
+            k_calc = x / x_half
+            k_eks = max(round(k_calc, 4), 0.1)
+            k_note = f"K_экс={k_eks:g}" if k_calc >= 0.1 else f"K_экс=0,1 (расч. {k_calc:.4f} < 0,1)"
+            if b > 0:
+                c_half = a + b * (0.4 * x_min + 0.6 * x_half)
+                val = c_half * k_eks
+                expr = f"[{a:g} + {b:g} × (0,4×{x_min:g} + 0,6×{x_half:g})] × {k_eks:g} [экстрап. ф. 8.4-8.5 ({k_note})]"
+            else:
+                c_half = a * (0.4 + 0.6 * 0.5)
+                val = c_half * k_eks
+                expr = f"[{a:g} × 0,7] × {k_eks:g} [экстрап. ф. 8.4-8.5 ({k_note})]"
         return val, a, b, expr
 
+    # --- СЛУЧАЙ 2: X БОЛЬШЕ МАКСИМАЛЬНОГО (X > X_max) ---
     if x > float(last["x_max"]):
-        x_max = max(float(last["x_max"]), 0.001)
+        x_max = max(float(last["x_max"]), 0.000001)
         a = float(last["a"])
         b = float(last["b"])
-        if b > 0:
-            x_eff = 0.4 * x_max + 0.6 * x
-            val = a + b * x_eff
-            expr = f"({a:g} + {b:g} × (0,4×{x_max:g} + 0,6×{x:g})) [экстрап. X > {x_max:g}]"
+        x_double = 2.0 * x_max
+
+        if x <= x_double:
+            # Формула (8.3) Методики № 707/пр (диапазон X_max < X <= 2.0 * X_max)
+            if b > 0:
+                x_eff = 0.4 * x_max + 0.6 * x
+                val = a + b * x_eff
+                expr = f"({a:g} + {b:g} × (0,4×{x_max:g} + 0,6×{x:g})) [экстрап. ф. 8.3]"
+            else:
+                k_ext = 0.4 + 0.6 * (x / x_max)
+                val = a * k_ext
+                expr = f"({a:g} × (0,4 + 0,6×{x:g}/{x_max:g})) [экстрап. ф. 8.3]"
         else:
-            k_ext = 0.4 + 0.6 * (x / x_max)
-            val = a * k_ext
-            expr = f"({a:g} × (0,4 + 0,6×{x:g}/{x_max:g})) [экстрап. X > {x_max:g}]"
+            # Формулы (8.6) и (8.7) Методики № 707/пр (X > 2.0 * X_max)
+            k_eks = round(x / x_double, 4)
+            if b > 0:
+                c_double = a + b * (0.4 * x_max + 0.6 * x_double)
+                val = c_double * k_eks
+                expr = f"[{a:g} + {b:g} × (0,4×{x_max:g} + 0,6×{x_double:g})] × {k_eks:g} [экстрап. ф. 8.6-8.7 (K_экс={k_eks:g})]"
+            else:
+                c_double = a * (0.4 + 0.6 * 2.0)
+                val = c_double * k_eks
+                expr = f"[{a:g} × 1,6] × {k_eks:g} [экстрап. ф. 8.6-8.7 (K_экс={k_eks:g})]"
         return val, a, b, expr
 
-    # Внутри одного из интервалов
+    # --- СЛУЧАЙ 3: ВНУТРИ ИНТЕРВАЛОВ ТАБЛИЦЫ ---
     chosen = last
     for iv in intervals:
         if float(iv["x_min"]) <= x <= float(iv["x_max"]):

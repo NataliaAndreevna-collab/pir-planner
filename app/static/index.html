@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ПИР Планнер — Состав проекта (ПП 87) и Календарный график</title>
+  <title>ПИР Планнер v2.1.0 — Состав разделов (ПП РФ № 87), смета (Форма 2п) и КП</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
@@ -23,7 +23,7 @@
           <i class="fa-solid fa-compass-drafting"></i>
         </div>
         <div>
-          <span class="text-lg font-bold tracking-tight">ПИР Планнер</span>
+          <span class="text-lg font-bold tracking-tight">ПИР Планнер</span><span class="ml-2.5 px-2 py-0.5 text-[11px] font-mono font-bold rounded-md bg-blue-500/20 text-blue-300 border border-blue-400/30">v2.1.0</span>
           <span class="text-xs block text-slate-400">Генератор состава разделов (ПП РФ № 87) и графика работ</span>
         </div>
       </div>
@@ -456,54 +456,22 @@
             </div>
           </div>
 
-          <!-- 2. Сводные карточки стоимости + выбор НДС + СМР -->
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <span class="text-xs font-semibold text-slate-500 block">Стоимость работ без НДС:</span>
-              <div id="costSummaryNetRub" class="text-xl font-extrabold text-slate-900 mt-1">0 ₽</div>
-              <span id="costSummaryPirSub" class="text-[11px] text-slate-500 block mt-1">Основные ПИР + доп. работы</span>
-            </div>
-
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-semibold text-slate-500">Ставка и сумма НДС:</span>
-                <select id="selectVatMode" class="text-xs font-bold border border-slate-300 rounded px-2 py-0.5 bg-white text-blue-700">
-                  <option value="5">НДС 5%</option>
-                  <option value="22">НДС 22%</option>
-                  <option value="0">Без НДС</option>
-                </select>
-              </div>
-              <div id="costSummaryVatRub" class="text-xl font-extrabold text-blue-700 mt-1">0 ₽</div>
-              <span class="text-[11px] text-slate-500 block mt-1">Настраивается для сметы и КП</span>
-            </div>
-
-            <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-              <span class="text-xs font-bold text-emerald-800 block">ИТОГО С НДС (к оплате):</span>
-              <div id="costSummaryGrossRub" class="text-xl font-extrabold text-emerald-700 mt-1">0 ₽</div>
-              <span id="costSummaryLaborSub" class="text-[11px] text-emerald-700 block mt-1">Трудоёмкость: 0 ч-д</span>
-            </div>
-
-            <div class="bg-blue-50/70 border border-blue-200 rounded-xl p-4">
-              <div class="flex items-center justify-between gap-1">
-                <span class="text-[11px] font-bold text-blue-900">Стоимость СМР, млн ₽:</span>
-                <input type="number" step="0.5" min="0" id="inputSmrMln" placeholder="не указана" class="w-24 text-right text-xs font-mono font-bold px-2 py-0.5 border border-blue-300 rounded bg-white text-blue-900">
-              </div>
-              <div id="costSmrRefValue" class="text-base font-extrabold text-blue-800 mt-1.5">—</div>
-              <span id="costSmrRefSub" class="text-[10px] text-blue-700 block mt-0.5">Справочно по Табл. 1.5 Методики № 707/пр</span>
-            </div>
-          </div>
-
-          <!-- Предупреждения расчёта (не задан X, не выбран сборник, нет СМР и т.п.) -->
+          <!-- 2. Сводные элементы (скрыты, перенесены в единый блок методов ниже) -->
+          <div id="costSummaryNetRub" class="hidden"></div>
+          <span id="costSummaryPirSub" class="hidden"></span>
+          <div id="costSmrRefValue" class="hidden"></div>
+          <span id="costSmrRefSub" class="hidden"></span>
+<!-- Предупреждения расчёта (не задан X, не выбран сборник, нет СМР и т.п.) -->
           <div id="costWarnings" class="hidden bg-amber-50 border border-amber-300 rounded-xl p-3 text-xs text-amber-900 space-y-1"></div>
 
-          <!-- 3. Сравнительная панель 4 НЕЗАВИСИМЫХ расчётов и общих коэффициентов -->
+          <!-- 3. Сравнительная панель 4 НЕЗАВИСИМЫХ расчётов, коэффициентов и итоговой стоимости -->
           <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <span class="text-xs font-bold text-slate-800">
                 <i class="fa-solid fa-scale-balanced text-blue-600 mr-1.5"></i>
-                Независимые расчёты стоимости ПИР (кликните по карточке, чтобы выбрать основной расчёт для сметы и КП):
+                Независимые расчёты стоимости ПИР (кликните по карточке для выбора основного расчёта сметы и КП):
               </span>
-              <span class="text-[11px] text-slate-500">Все 4 расчёта выполняются полностью независимо без взаимной подгонки</span>
+              <span class="text-[11px] text-slate-500">Все 4 расчёта выполняются независимо без взаимной подгонки</span>
             </div>
 
             <!-- Карточки-переключатели 4 независимых расчётов со своими суммами -->
@@ -511,45 +479,69 @@
               <button type="button" data-method="by_collections" class="cost-method-btn text-left p-3 rounded-xl border transition bg-blue-600 text-white border-blue-700 shadow-xs">
                 <div class="text-[11px] font-bold opacity-90">1. По сборникам (МНЗ / СБЦП)</div>
                 <div id="indTotalCollections" class="text-base font-extrabold mt-1">0 ₽</div>
-                <div class="text-[10px] opacity-80 mt-0.5">Форма 2П (с учётом полноты разделов К_разд)</div>
+                <div class="text-[10px] opacity-80 mt-0.5">Форма 2П (с учётом К_разд)</div>
               </button>
 
               <button type="button" data-method="labor_707" class="cost-method-btn text-left p-3 rounded-xl border transition bg-white text-slate-800 border-slate-300 hover:border-blue-400">
                 <div class="text-[11px] font-bold">2А. По Методике № 707/пр (от ЗП)</div>
                 <div id="indTotalLabor707" class="text-base font-extrabold mt-1">0 ₽</div>
-                <div class="text-[10px] opacity-75 mt-0.5">п. 143–149, ф. 8.12–8.14, Табл. 1.1–1.3</div>
+                <div class="text-[10px] opacity-75 mt-0.5">п. 143–149, ф. 8.12–8.14</div>
               </button>
 
-              <button type="button" data-method="labor_internal" class="cost-method-btn text-left p-3 rounded-xl border transition bg-white text-slate-800 border-slate-300 hover:border-blue-400">
+              <button type="button" data-method="labor_market" class="cost-method-btn text-left p-3 rounded-xl border transition bg-white text-slate-800 border-slate-300 hover:border-blue-400">
                 <div class="text-[11px] font-bold">2Б. По таблице рыночной стоимости</div>
                 <div id="indTotalLaborMarket" class="text-base font-extrabold mt-1">0 ₽</div>
-                <div class="text-[10px] opacity-75 mt-0.5">Рыночные оклады специалистов (г. Тюмень)</div>
+                <div class="text-[10px] opacity-75 mt-0.5">Рыночные оклады (г. Тюмень)</div>
               </button>
 
               <button type="button" data-method="from_smr" class="cost-method-btn text-left p-3 rounded-xl border transition bg-white text-slate-800 border-slate-300 hover:border-blue-400">
-                <div class="text-[11px] font-bold">3. От стоимости СМР (Табл. 1.5)</div>
+                <div class="flex items-center justify-between">
+                  <div class="text-[11px] font-bold">3. От стоимости СМР</div>
+                  <input type="number" step="0.5" min="0" id="inputSmrMln" placeholder="СМР млн ₽" class="w-24 text-right text-[11px] font-mono font-bold px-1.5 py-0.5 border border-slate-300 rounded bg-white text-blue-900" onclick="event.stopPropagation()">
+                </div>
                 <div id="indTotalSmr" class="text-base font-extrabold mt-1">—</div>
-                <div class="text-[10px] opacity-75 mt-0.5">Норматив % от СМР по Прил. 2 № 707/пр</div>
+                <div class="text-[10px] opacity-75 mt-0.5">Табл. 1.5 Методики № 707/пр</div>
               </button>
             </div>
 
-            <!-- Общие повышающие коэффициенты -->
-            <div class="flex flex-wrap items-center gap-5 pt-2 border-t border-slate-200 text-xs">
-              <label class="inline-flex items-center cursor-pointer font-medium text-slate-700">
-                <input type="checkbox" id="chkCostReconstr" class="w-4 h-4 text-blue-600 rounded border-slate-300 mr-1.5">
-                Реконструкция / техперевооружение (К = 1.20)
-              </label>
-              <label class="inline-flex items-center cursor-pointer font-medium text-slate-700">
-                <input type="checkbox" id="chkCostBim" class="w-4 h-4 text-blue-600 rounded border-slate-300 mr-1.5">
-                Применение ТИМ / BIM-модели (К = 1.15)
-              </label>
-              <div class="inline-flex items-center gap-1.5">
-                <span class="text-slate-600 font-medium">Коэф. сложности:</span>
-                <input type="number" step="0.05" min="0.5" max="3.0" id="inpCostComplexity" value="1.0" class="w-16 text-center font-mono font-bold px-1.5 py-0.5 border border-slate-300 rounded bg-white">
+            <!-- Общие коэффициенты + НДС + ИТОГО К ОПЛАТЕ в единой строке -->
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-200 text-xs">
+              <div class="flex flex-wrap items-center gap-3">
+                <label class="inline-flex items-center cursor-pointer font-medium text-slate-700">
+                  <input type="checkbox" id="chkCostReconstr" class="w-4 h-4 text-blue-600 rounded border-slate-300 mr-1.5">
+                  Реконструкция (К = 1.20)
+                </label>
+                <label class="inline-flex items-center cursor-pointer font-medium text-slate-700">
+                  <input type="checkbox" id="chkCostBim" class="w-4 h-4 text-blue-600 rounded border-slate-300 mr-1.5">
+                  ТИМ / BIM (К = 1.15)
+                </label>
+                <div class="inline-flex items-center gap-1">
+                  <span class="text-slate-600 font-medium">К.сложн:</span>
+                  <input type="number" step="0.05" min="0.5" max="3.0" id="inpCostComplexity" value="1.0" class="w-14 text-center font-mono font-bold px-1 py-0.5 border border-slate-300 rounded bg-white">
+                </div>
+                <div class="inline-flex items-center gap-1">
+                  <span class="text-slate-600 font-medium">К.срочн:</span>
+                  <input type="number" step="0.05" min="0.5" max="3.0" id="inpCostUrgency" value="1.0" class="w-14 text-center font-mono font-bold px-1 py-0.5 border border-slate-300 rounded bg-white">
+                </div>
               </div>
-              <div class="inline-flex items-center gap-1.5">
-                <span class="text-slate-600 font-medium">Коэф. срочности:</span>
-                <input type="number" step="0.05" min="0.5" max="3.0" id="inpCostUrgency" value="1.0" class="w-16 text-center font-mono font-bold px-1.5 py-0.5 border border-slate-300 rounded bg-white">
+
+              <!-- Блок НДС и ИТОГО -->
+              <div class="flex flex-wrap items-center gap-3 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-2xs">
+                <div class="inline-flex items-center gap-1.5">
+                  <span class="text-slate-500 font-medium">НДС:</span>
+                  <select id="selectVatMode" class="text-xs font-bold border border-slate-300 rounded px-1.5 py-0.5 bg-white text-blue-700">
+                    <option value="5">5%</option>
+                    <option value="22">22%</option>
+                    <option value="0">Без НДС</option>
+                  </select>
+                  <span id="costSummaryVatRub" class="font-mono font-semibold text-blue-700 text-xs">0 ₽</span>
+                </div>
+                <div class="h-4 w-px bg-slate-200"></div>
+                <div class="inline-flex items-center gap-1.5">
+                  <span class="font-bold text-slate-700">ИТОГО С НДС:</span>
+                  <span id="costSummaryGrossRub" class="text-base font-extrabold text-emerald-700 font-mono">0 ₽</span>
+                  <span id="costSummaryLaborSub" class="text-[10px] text-slate-400">(0 ч-д)</span>
+                </div>
               </div>
             </div>
           </div>
@@ -568,9 +560,7 @@
                 <button id="btnAiSuggestCollections" type="button" title="В нейросеть уходит текст ТЗ с замаскированными реквизитами" class="bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
                   <i class="fa-solid fa-robot mr-1.5"></i> Подобрать позиции по ТЗ (ИИ)
                 </button>
-                <button id="btnAiFillX" type="button" title="Ищет X только для строк, где оно ещё не определено; введённые вручную значения не трогает" class="bg-violet-100 hover:bg-violet-200 text-violet-900 text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
-                  <i class="fa-solid fa-magnifying-glass mr-1.5"></i> Найти X в ТЗ (ИИ)
-                </button>
+
                 <button id="btnAddCollectionRow" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition flex items-center">
                   <i class="fa-solid fa-plus mr-1.5"></i> Добавить позицию из сборника
                 </button>
@@ -732,8 +722,8 @@
             </div>
           </div>
 
-          <!-- 6. Распределение стоимости по разделам проекта (по умолчанию вместе, галочкой — отдельно П и Р) -->
-          <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <!-- 6. Распределение стоимости по разделам проекта (скрыто по требованию) -->
+          <div id="panelCostSectionsDistribution" class="hidden border border-slate-200 rounded-xl overflow-hidden">
             <div class="bg-slate-100 px-4 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 class="text-sm font-bold text-slate-800">
@@ -808,193 +798,349 @@
 
   <!-- Модальное окно настройки и выгрузки Коммерческого предложения (.docx) -->
   <div id="kpModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+
     <div class="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden">
+
       <!-- Шапка модального окна -->
+
       <div class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+
         <div>
+
           <h3 class="text-base font-bold flex items-center">
+
             <i class="fa-solid fa-file-contract text-indigo-400 mr-2"></i>
+
             Формирование Коммерческого предложения (.docx)
+
           </h3>
-          <p id="kpModeInfo" class="text-[11px] text-slate-300 mt-0.5">Проверка шаблона бланка...</p>
+
+          <p id="kpModeInfo" class="text-[11px] text-emerald-400 font-semibold mt-0.5 flex items-center"><i class="fa-solid fa-circle-check mr-1.5"></i> Фирменный бланк компании подключен (data/private/kp_letterhead.docx)</p>
+
         </div>
+
         <button id="kpClose" type="button" class="text-slate-400 hover:text-white text-lg px-2 py-1">
+
           <i class="fa-solid fa-xmark"></i>
+
         </button>
+
       </div>
 
       <!-- Тело модального окна -->
+
       <div class="p-6 overflow-y-auto space-y-5 text-xs">
 
         <!-- 1. Исходящий номер, дата и адресат -->
+
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+
           <div>
+
             <label class="block font-semibold text-slate-700 mb-1">Исх. № (порядковая часть):</label>
+
             <div class="flex items-center">
+
               <input type="text" id="kpOutNum" placeholder="оставьте пустым для ____" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-l-lg bg-white font-mono">
+
               <span id="kpOutSuffix" class="px-2.5 py-1.5 bg-slate-100 border border-l-0 border-slate-300 rounded-r-lg font-mono font-bold text-slate-700">/1026</span>
+
             </div>
+
             <span class="text-[10px] text-slate-400">ММГГ подставляется автоматически</span>
+
           </div>
+
           <div>
+
             <label class="block font-semibold text-slate-700 mb-1">Дата КП:</label>
+
             <input type="date" id="kpDate" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white">
+
           </div>
+
           <div>
+
             <label class="block font-semibold text-slate-700 mb-1">В ответ на запрос от (необяз.):</label>
+
             <input type="text" id="kpRequestDate" placeholder="напр. 15.10.2026 № 124" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white">
+
           </div>
+
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+
           <div>
+
             <label class="block font-semibold text-slate-700 mb-1">Адресат в шапке (по строкам: Должность, Организация, ФИО):</label>
+
             <textarea id="kpAddressee" rows="3" placeholder="Директору&#10;ООО «Заказчик»&#10;Иванову И.И." class="w-full p-2 border border-slate-300 rounded-lg bg-white"></textarea>
+
           </div>
+
           <div class="space-y-2">
+
             <div>
+
               <label class="block font-semibold text-slate-700 mb-1">Обращение по центру:</label>
+
               <input type="text" id="kpSalutation" value="Уважаемый Заказчик!" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold">
+
             </div>
+
             <div>
+
               <label class="block font-semibold text-slate-700 mb-1">Стадия работ в предмете КП:</label>
+
               <select id="kpStage" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold">
+
                 <option value="pd_rd">Проектная и рабочая документация (ПД и РД)</option>
+
                 <option value="pd">Проектная документация (ПД)</option>
+
                 <option value="rd">Рабочая документация (РД)</option>
+
                 <option value="changes">Внесение изменений в проектную документацию</option>
+
               </select>
+
             </div>
+
           </div>
+
         </div>
 
         <div>
+
           <label class="block font-semibold text-slate-700 mb-1">Свой текст абзаца предмета КП (оставьте пустым для автоформирования):</label>
+
           <input type="text" id="kpSubject" placeholder="Автоматически: Направляем коммерческое предложение на разработку..." class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white">
+
         </div>
 
         <!-- 2. Формат представления цены в КП -->
+
         <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+
           <div class="flex flex-wrap items-center justify-between gap-2">
+
             <label class="font-bold text-slate-800 text-xs">Формат представления стоимости в тексте КП:</label>
+
             <select id="kpPriceFormat" class="px-3 py-1.5 border border-blue-300 rounded-lg bg-white font-bold text-blue-800">
+
               <option value="total">1. Только итоговая сумма и прописью (без таблицы)</option>
+
               <option value="sections">2. Таблица стоимости по разделам ПД / РД</option>
+
               <option value="works">3. Таблица по укрупнённым видам работ (ПД+РД, ИИ, обследование и др.)</option>
+
             </select>
+
           </div>
 
           <div id="kpWorksBlock" class="hidden space-y-1">
+
             <label class="block font-semibold text-slate-700">Строки таблицы видов работ (формат: Наименование вида работ | Сумма без НДС в руб.):</label>
+
             <textarea id="kpWorks" rows="4" class="w-full p-2 font-mono text-xs border border-slate-300 rounded-lg bg-white" placeholder="Разработка проектной и рабочей документации | 1500000&#10;Комплексные инженерные изыскания | 350000"></textarea>
+
           </div>
+
         </div>
 
         <!-- 3. Что входит и что НЕ входит в стоимость -->
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
           <div>
+
             <label class="block font-semibold text-slate-700 mb-1">В коммерческое предложение входит (по строкам):</label>
+
             <textarea id="kpIncl" rows="4" class="w-full p-2 border border-slate-300 rounded-lg bg-white" placeholder="Сбор исходных данных&#10;Разработка проектной и рабочей документации"></textarea>
+
           </div>
+
           <div class="space-y-1.5">
+
             <label class="block font-semibold text-slate-700">Стоимость НЕ включает (отметьте нужное):</label>
+
             <label class="flex items-center cursor-pointer"><input type="checkbox" class="kpExcl w-3.5 h-3.5 text-blue-600 rounded mr-2" value="оплата государственной / негосударственной экспертизы проектной документации" checked> Оплата прохождения экспертизы ПД</label>
+
             <label class="flex items-center cursor-pointer"><input type="checkbox" class="kpExcl w-3.5 h-3.5 text-blue-600 rounded mr-2" value="выполнение комплексных инженерных изысканий (ИГДИ, ИГИ, ИЭИ)"> Выполнение инженерных изысканий</label>
+
             <label class="flex items-center cursor-pointer"><input type="checkbox" class="kpExcl w-3.5 h-3.5 text-blue-600 rounded mr-2" value="разработка специальных технических условий (СТУ)"> Разработка СТУ</label>
+
             <label class="flex items-center cursor-pointer"><input type="checkbox" class="kpExcl w-3.5 h-3.5 text-blue-600 rounded mr-2" value="платежи за согласования с владельцами инженерных сетей и выдачу ТУ"> Платежи за согласования и выдачу ТУ</label>
+
+            <label class="flex items-center cursor-pointer"><input type="checkbox" class="kpExcl w-3.5 h-3.5 text-blue-600 rounded mr-2" value="авторский надзор за строительством (выполняется по отдельному договору)" checked> Авторский надзор за строительством</label>
+
             <input type="text" id="kpExclExtra" placeholder="Дополнительно не входит (через Enter или строку)..." class="w-full px-2 py-1 border border-slate-300 rounded bg-white mt-1">
+
           </div>
+
         </div>
 
         <!-- 4. Срок выполнения работ и условия оплаты -->
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+
           <div class="space-y-2">
+
             <label class="block font-bold text-slate-800">Срок выполнения работ:</label>
+
             <div class="flex items-center gap-2">
+
               <input type="number" min="1" id="kpTermValue" value="60" class="w-24 text-center font-mono font-bold px-2 py-1.5 border border-slate-300 rounded-lg bg-white">
+
               <select id="kpTermUnit" class="flex-1 px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold">
+
                 <option value="calendar_days">календарных дней</option>
+
                 <option value="working_days">рабочих дней</option>
+
                 <option value="months">месяцев</option>
+
               </select>
+
             </div>
+
             <label class="inline-flex items-center cursor-pointer text-[11px] text-slate-600">
+
               <input type="checkbox" id="kpApproval" checked class="w-3.5 h-3.5 text-blue-600 rounded mr-1.5">
-              *В срок не входит время согласования документации с заказчиком и ведомствами
+
+              *В сроки не входит время согласования с Заказчиком и ресурсоснабжающими организациями
+
             </label>
+
           </div>
 
           <div class="space-y-2">
+
             <label class="block font-bold text-slate-800">Условия оплаты:</label>
-            <select id="kpPayment" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold">
-              <option value="stages">Поэтапная оплата (40% аванс / 30% передача / 30% акт)</option>
-              <option value="advance">Авансирование одной строкой (N%)</option>
+
+            <select id="kpPaymentPreset" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold text-xs">
+
+              <option value="100_advance">100% предоплата (до начала выполнения работ)</option>
+
+              <option value="40_30_30" selected>40% аванс / 30% передача / 30% акт (стандарт)</option>
+
+              <option value="50_50">50% аванс / 50% после подписания акта</option>
+
+              <option value="30_50_20">30% аванс / 50% передача / 20% акт</option>
+
+              <option value="100_post">100% постоплата (после подписания акта сдачи-приемки)</option>
+
+              <option value="custom">Индивидуальная настройка формулировок условий оплаты...</option>
+
             </select>
-            <div id="kpAdvanceBlock" class="hidden flex items-center gap-2">
-              <span>Размер аванса, %:</span>
-              <input type="number" min="0" max="100" id="kpAdvance" value="50" class="w-20 text-center font-mono font-bold px-2 py-1 border border-slate-300 rounded bg-white">
+
+            <div id="kpStagesBlock" class="space-y-1">
+
+              <label class="block text-[11px] font-semibold text-slate-600">Формулировка условий оплаты (редактируемая):</label>
+
+              <textarea id="kpPaymentStagesText" rows="3" class="w-full p-2 text-[11px] border border-slate-300 rounded-lg bg-white font-mono"></textarea>
+
             </div>
-            <div id="kpStagesBlock" class="text-[11px] text-slate-500">
-              Стандартная схема: 40% предоплата, 30% при передаче комплекта на согласование, 30% после подписания акта.
-            </div>
+
           </div>
+
         </div>
 
         <!-- 5. Стандартные фразы со звёздочкой и срок действия КП -->
+
         <div class="flex flex-wrap items-center justify-between gap-3">
+
           <div class="space-y-1">
+
             <label class="flex items-center cursor-pointer font-semibold text-slate-800">
+
               <input type="checkbox" id="kpPhraseCounter" checked class="w-4 h-4 text-blue-600 rounded mr-2">
+
               * Готовы рассмотреть встречные предложения по срокам и стоимости проектирования
+
             </label>
+
             <label class="flex items-center cursor-pointer text-slate-700">
+
               <input type="checkbox" id="kpPhraseTz" class="w-4 h-4 text-blue-600 rounded mr-2">
+
               * Готовы помочь в разработке Технического задания
+
             </label>
+
           </div>
+
           <div class="flex items-center gap-2">
+
             <span class="font-semibold text-slate-700">Срок действия КП (раб. дней):</span>
+
             <input type="number" min="5" max="90" id="kpValidity" value="15" class="w-16 text-center font-mono font-bold px-2 py-1 border border-slate-300 rounded bg-white">
+
           </div>
+
         </div>
 
-        <!-- 6. Подписант и исполнитель (для нейтрального шаблона или подстановки в бланк) -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
+        <!-- 6. Подписант и исполнитель в фирменном бланке -->
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
+
           <div>
-            <label class="block font-semibold text-slate-600 mb-1">Организация:</label>
-            <input type="text" id="kpCompany" placeholder="ООО «Компания»" class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
-          </div>
-          <div>
+
             <label class="block font-semibold text-slate-600 mb-1">Должность подписанта:</label>
+
             <input type="text" id="kpSignerTitle" value="Директор" class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
+
           </div>
+
           <div>
+
             <label class="block font-semibold text-slate-600 mb-1">И.О. Фамилия подписанта:</label>
-            <input type="text" id="kpSignerName" placeholder="И.О. Фамилия" class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
+
+            <input type="text" id="kpSignerName" value="Валова М.М." placeholder="Валова М.М." class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
+
           </div>
+
           <div>
+
             <label class="block font-semibold text-slate-600 mb-1">Исполнитель и телефон:</label>
-            <input type="text" id="kpExecutor" placeholder="Фамилия И.О. тел. +7..." class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
+
+            <input type="text" id="kpExecutor" value="Эберт Е.В. +7-932-326-93-83" placeholder="Эберт Е.В. +7-932-326-93-83" class="w-full px-2 py-1 border border-slate-300 rounded bg-white">
+
           </div>
+
         </div>
 
       </div>
 
       <!-- Футер модального окна -->
+
       <div class="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
+
         <button type="button" onclick="document.getElementById('kpModal').classList.add('hidden')" class="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 font-semibold text-xs hover:bg-slate-100">
+
           Отмена
+
         </button>
+
         <button id="kpGenerate" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-2 rounded-lg shadow-sm text-xs flex items-center">
+
           <i class="fa-solid fa-file-word mr-2"></i>
+
           Скачать Коммерческое предложение (.docx)
+
         </button>
+
       </div>
+
     </div>
+
   </div>
 
   <footer class="bg-slate-900 text-slate-400 text-xs py-4 border-t border-slate-800 text-center">
+
     ПИР Планнер — Инструмент формирования состава проектной и рабочей документации (ПП РФ № 87, ГОСТ Р 21.101-2020), графика и расчёта стоимости ПИР
+
   </footer>
 
   <script src="/static/app.js"></script>

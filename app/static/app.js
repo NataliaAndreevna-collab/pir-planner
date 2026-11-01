@@ -1947,12 +1947,8 @@ function renderCostTab() {
 
   const warnBox = document.getElementById("costWarnings");
   if (warnBox) {
-    const warns = cp.warnings || [];
-    warnBox.classList.toggle("hidden", warns.length === 0);
-    warnBox.innerHTML = warns.length
-      ? '<div class="font-bold"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>Внимание: расчёт неполный</div>' +
-        warns.map((w) => `<div>• ${String(w).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`).join("")
-      : "";
+    warnBox.classList.add("hidden");
+    warnBox.innerHTML = "";
   }
 
   const vatSel = document.getElementById("selectVatMode");

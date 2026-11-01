@@ -227,8 +227,10 @@ def calculate_cost_endpoint(data: ProjectData):
 @app.post("/api/ai-suggest-collections", response_model=ProjectData)
 def ai_suggest_collections_endpoint(data: ProjectData):
     """
-    Этап Б, запрос 1: нейросеть находит в ТЗ объекты и подбирает для них позиции справочника (без значения X).
-    В нейросеть уходит только замаскированный текст. Выполняется по явной кнопке пользователя.
+    Этап Б: двухэтапный подбор позиций.
+    1. Нейросеть находит объекты и сопоставляет их с позициями справочника.
+    2. Для каждой выбранной позиции адресным запросом извлекает показатель X и переводит в единицы таблицы.
+       Если параметр в ТЗ не указан, автоматически применяется минимальное нормативное значение с пометкой.
     """
     apply_volume_ciphers(data)
     if not data.cost_parameters:
@@ -238,7 +240,10 @@ def ai_suggest_collections_endpoint(data: ProjectData):
     if err:
         raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
     data.cost_parameters.collection_items.extend(new_items)
-    data.cost_parameters.ai_notes = notes + ([f"Добавлено позиций: {len(new_items)}. Проверьте подбор и при необходимости измените сборник/таблицу."] if new_items else [])
+    if new_items:
+        done_x, notes_x, err_x = fill_x_values(data, catalog)
+        # Построчные примечания к X остаются в смете под каждой строкой
+    data.cost_parameters.ai_notes = notes + ([f"Подобрано и рассчитано позиций: {len(new_items)}."] if new_items else [])
     recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     return data
 
@@ -256,7 +261,7 @@ def ai_fill_x_endpoint(data: ProjectData):
     done, notes, err = fill_x_values(data, catalog)
     if err:
         raise HTTPException(status_code=502, detail=f"Ошибка нейросети: {err}")
-    data.cost_parameters.ai_notes = ([f"Обработано строк: {done}."] if done else []) + notes
+    data.cost_parameters.ai_notes = ([f"Рассчитано показателей X для строк: {done}."] if done else [])
     recalculate_cost_parameters(data.cost_parameters, has_pd=data.has_pd, has_rd=data.has_rd)
     return data
 

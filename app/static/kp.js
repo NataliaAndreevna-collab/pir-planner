@@ -1,4 +1,4 @@
-// Модуль «Коммерческое предложение»: форма параметров КП и скачивание .docx.
+// Модуль «Коммерческое предложение»: форма параметров КП и скачивание .docx на фирменном бланке компании.
 // Использует глобальные currentProject, syncProjectFromInputs, syncCostInputsToModel из app.js.
 (function () {
   const btnOpen = document.getElementById("btnOpenKp");
@@ -11,6 +11,29 @@
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
+
+  const PAYMENT_PRESETS = {
+    "100_advance": [
+      "Предоплата в размере 100% стоимости работ производится в течение 5 рабочих дней с момента заключения договора (до начала выполнения работ)."
+    ],
+    "40_30_30": [
+      "Предоплата - 40% стоимости работ по договору производится в течении 5-ти рабочих дней с момента заключения договора;",
+      "Оплата в размере 30% стоимости работ производится в течении 5 рабочих дней с момента передачи полного комплекта проектной документации заказчику;",
+      "Оплата в размере 30% стоимости работ производится в течении 5 рабочих дней с момента подписания акта выполненных работ."
+    ],
+    "50_50": [
+      "Аванс в размере 50% стоимости работ производится в течение 5 рабочих дней с момента заключения договора.",
+      "Оплата оставшихся 50% стоимости работ производится в течение 5 рабочих дней с момента подписания акта сдачи-приемки выполненных работ."
+    ],
+    "30_50_20": [
+      "Предоплата — 30% стоимости работ производится в течение 5 рабочих дней с момента заключения договора.",
+      "Оплата в размере 50% стоимости работ производится в течение 5 рабочих дней с момента передачи полного комплекта документации на согласование.",
+      "Оплата в размере 20% стоимости работ производится в течение 5 рабочих дней с момента подписания акта сдачи-приемки выполненных работ."
+    ],
+    "100_post": [
+      "Оплата в размере 100% стоимости работ производится в течение 10 рабочих дней с момента подписания акта сдачи-приемки выполненных работ (без авансирования)."
+    ],
+  };
 
   function updateOutSuffix() {
     const dtVal = $("kpDate")?.value;
@@ -32,20 +55,48 @@
   fetch("/api/kp-info")
     .then((r) => r.json())
     .then((info) => {
-      $("kpModeInfo").textContent = info.corporate_letterhead
-        ? "Режим: корпоративный бланк компании подключен (data/private/kp_letterhead.docx)."
-        : "Режим: нейтральный образец (без приватных данных компании). Реквизиты и подписант заполняются ниже.";
+      if ($("kpModeInfo")) {
+        $("kpModeInfo").innerHTML = '<i class="fa-solid fa-circle-check mr-1.5"></i> Фирменный бланк компании подключен (data/private/kp_letterhead.docx)';
+      }
     })
     .catch(() => {});
 
   function toggleBlocks() {
-    $("kpWorksBlock").classList.toggle("hidden", $("kpPriceFormat").value !== "works");
-    $("kpAdvanceBlock").classList.toggle("hidden", $("kpPayment").value !== "advance");
-    $("kpStagesBlock").classList.toggle("hidden", $("kpPayment").value !== "stages");
+    if ($("kpWorksBlock")) {
+      $("kpWorksBlock").classList.toggle("hidden", $("kpPriceFormat")?.value !== "works");
+    }
   }
-  $("kpPriceFormat").addEventListener("change", toggleBlocks);
-  $("kpPayment").addEventListener("change", toggleBlocks);
+  if ($("kpPriceFormat")) $("kpPriceFormat").addEventListener("change", toggleBlocks);
   toggleBlocks();
+
+  // Обработка пресетов условий оплаты
+  if ($("kpPaymentPreset")) {
+    $("kpPaymentPreset").addEventListener("change", () => {
+      const val = $("kpPaymentPreset").value;
+      if (val in PAYMENT_PRESETS && $("kpPaymentStagesText")) {
+        $("kpPaymentStagesText").value = PAYMENT_PRESETS[val].join("\n");
+      }
+    });
+  }
+  if ($("kpPaymentStagesText")) {
+    $("kpPaymentStagesText").addEventListener("input", () => {
+      if ($("kpPaymentPreset")) {
+        // Проверяем, совпадает ли текст с каким-то пресетом
+        const cur = $("kpPaymentStagesText").value.trim();
+        let matched = false;
+        for (const [k, arr] of Object.entries(PAYMENT_PRESETS)) {
+          if (arr.join("\n").trim() === cur) {
+            $("kpPaymentPreset").value = k;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) {
+          $("kpPaymentPreset").value = "custom";
+        }
+      }
+    });
+  }
 
   function prefillModalFromProject() {
     if (!currentProject) return;
@@ -109,6 +160,14 @@
       }
       $("kpIncl").value = incl.join("\n");
     }
+
+    // Инициализация условий оплаты дефолтным пресетом, если пусто
+    if ($("kpPaymentStagesText") && !$("kpPaymentStagesText").value.trim()) {
+      const preset = $("kpPaymentPreset")?.value || "40_30_30";
+      if (PAYMENT_PRESETS[preset]) {
+        $("kpPaymentStagesText").value = PAYMENT_PRESETS[preset].join("\n");
+      }
+    }
   }
 
   btnOpen.addEventListener("click", () => {
@@ -132,11 +191,26 @@
     });
   }
 
+  function parsePaymentStages() {
+    return lines("kpPaymentStagesText").map((ln) => {
+      const m = ln.match(/(\d+(?:[.,]\d+)?)\s*%/);
+      const percent = m ? parseFloat(m[1].replace(",", ".")) : 0;
+      return {
+        percent: percent,
+        text: ln.trim(),
+      };
+    });
+  }
+
   $("kpGenerate").addEventListener("click", async () => {
     syncProjectFromInputs();
     if (typeof syncCostInputsToModel === "function") syncCostInputsToModel();
     const exclusions = Array.from(document.querySelectorAll(".kpExcl:checked")).map((c) => c.value);
     lines("kpExclExtra").forEach((x) => exclusions.push(x));
+
+    const paymentStages = parsePaymentStages();
+    const firstPercent = paymentStages.length ? paymentStages[0].percent : 0;
+
     const payload = {
       project: currentProject,
       outgoing_number: $("kpOutNum").value.trim(),
@@ -153,17 +227,18 @@
       term_value: parseInt($("kpTermValue").value, 10) || 0,
       term_unit: $("kpTermUnit").value,
       note_approval_excluded: $("kpApproval").checked,
-      payment_scheme: $("kpPayment").value,
-      advance_percent: parseFloat($("kpAdvance").value) || 0,
-      payment_stages: [],
+      payment_scheme: "stages",
+      advance_percent: firstPercent,
+      payment_stages: paymentStages,
       validity_days: parseInt($("kpValidity").value, 10) || 15,
       phrase_counter_offers: $("kpPhraseCounter").checked,
       phrase_help_tz: $("kpPhraseTz").checked,
       signer_title: $("kpSignerTitle").value.trim() || "Директор",
-      signer_name: $("kpSignerName").value.trim(),
-      company_name: $("kpCompany").value.trim(),
-      executor: $("kpExecutor").value.trim(),
+      signer_name: $("kpSignerName").value.trim() || "Валова М.М.",
+      company_name: $("kpCompany") ? $("kpCompany").value.trim() : "ООО «ТПС»",
+      executor: $("kpExecutor").value.trim() || "Эберт Е.В. Тел. +7 932 326 93 83",
     };
+
     if (payload.price_format === "works" && !payload.works.length) {
       alert("Для таблицы по видам работ добавьте хотя бы одну строку.");
       return;
@@ -178,7 +253,11 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error("Не удалось сформировать КП");
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.detail || "Не удалось сформировать КП на фирменном бланке";
+        throw new Error(errMsg);
+      }
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");

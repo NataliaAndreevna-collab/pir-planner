@@ -120,7 +120,16 @@ def mask_for_ai(
     text = _replace_known(text, contractor, "[ПОДРЯДЧИК]", "подрядчик", res)
     text = _replace_known(text, contract_number, "[НОМЕР ДОГОВОРА]", "договор", res)
     text = _replace_known(text, contract_date, "[ДАТА ДОГОВОРА]", "договор", res)
-    text = _replace_known(text, object_name, "[ОБЪЕКТ]", "объект", res)
+
+    # Сохраняем физические параметры объекта (МВт, км, м3/сут и т.п.) перед маскированием
+    obj_name_clean = object_name or ""
+    tech_params = re.findall(
+        r"\b\d+(?:[.,]\d+)?\s*(?:МВт|кВт|Гкал(?:/ч)?|тыс\.\s*м3(?:/сут)?|м3(?:/сут|/ч)?|тыс\.\s*м3|км|п\.м|м2|га|кВ)\b",
+        obj_name_clean,
+        re.IGNORECASE,
+    )
+    obj_placeholder = f"[ОБЪЕКТ ({', '.join(tech_params)})]" if tech_params else "[ОБЪЕКТ]"
+    text = _replace_known(text, object_name, obj_placeholder, "объект", res)
     # Короткие обозначения объекта в иных написаниях: «ТЭЦ1» -> «ТЭЦ-1», «ТЭЦ 1»
     for tok in re.findall(r"[А-ЯЁA-Zа-яёa-z]{2,}\d+", object_name or ""):
         letters, digits = re.match(r"([А-ЯЁA-Zа-яёa-z]+)(\d+)", tok).groups()

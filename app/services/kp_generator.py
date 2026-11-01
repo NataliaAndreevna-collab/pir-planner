@@ -1,14 +1,5 @@
 """
-Генератор коммерческого предложения (.docx).
-
-Два режима:
-1. Нейтральный (по умолчанию, общедоступный): документ собирается с нуля, данных компании нет,
-   вместо них заглушки («ООО «Компания», ИНН …»).
-2. Корпоративный: если существует приватный файл бланка (env KP_LETTERHEAD_PATH, по умолчанию
-   data/private/kp_letterhead.docx), он используется как основа: сохраняются оформление, логотип,
-   реквизиты. В бланке заменяются метки {{OUT_NUM}}, {{DATE}}, {{ADDRESSEE}}, {{SIGNER}},
-   {{EXECUTOR}}, а на месте абзаца {{BODY}} вставляется основной текст КП.
-   Файл бланка не хранится в репозитории (папка data/private в .gitignore).
+Генератор коммерческого предложения (.docx) на фирменном бланке организации ООО «ТПС».
 """
 import io
 import os
@@ -35,23 +26,31 @@ from app.services.money import format_rub, plural_form, rubles_in_words
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_LETTERHEAD = os.path.join(BASE_DIR, "data", "private", "kp_letterhead.docx")
 
-MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
-              "сентября", "октября", "ноября", "декабря"]
+MONTHS_GEN = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря"
+]
 
 STAGE_TEXT = {
     KPStage.PD: "разработку проектной документации",
     KPStage.RD: "разработку рабочей документации",
-    KPStage.PD_RD: "разработку проектной и рабочей документации",
+    KPStage.PD_RD: "разработку проектной документации (стадия ПД + РД)",
     KPStage.CHANGES: "внесение изменений в проектную документацию",
 }
 
 DEFAULT_PAYMENT_STAGES = [
-    KPPaymentStage(percent=40, text="Предоплата - 40% стоимости работ по договору производится в течение "
-                                    "5 рабочих дней с момента заключения договора."),
-    KPPaymentStage(percent=30, text="Оплата в размере 30% стоимости работ производится в течение 5 рабочих дней "
-                                    "с момента передачи полного комплекта документации на согласование."),
-    KPPaymentStage(percent=30, text="Оплата в размере 30% стоимости работ производится в течение 5 рабочих дней "
-                                    "с момента подписания акта выполненных работ."),
+    KPPaymentStage(
+        percent=40,
+        text="Предоплата - 40% стоимости работ по договору производится в течении 5-ти рабочих дней с момента заключения договора;"
+    ),
+    KPPaymentStage(
+        percent=30,
+        text="Оплата в размере 30% стоимости работ производится в течении 5 рабочих дней с момента передачи полного комплекта проектной документации заказчику;"
+    ),
+    KPPaymentStage(
+        percent=30,
+        text="Оплата в размере 30% стоимости работ производится в течении 5 рабочих дней с момента подписания акта выполненных работ."
+    ),
 ]
 
 
@@ -72,13 +71,13 @@ def _parse_date(value: str) -> date_cls:
 
 
 def format_kp_date(d: date_cls) -> str:
-    return f"«{d.day:02d}» {MONTHS_GEN[d.month - 1]} {d.year} г."
+    return f"«{d.day:02d}» {MONTHS_GEN[d.month - 1]} {d.year}г."
 
 
 def outgoing_number_text(number: str, d: date_cls) -> str:
-    """Порядковая часть вписывается пользователем; ММГГ подставляется автоматически."""
     suffix = f"{d.month:02d}{d.year % 100:02d}"
-    return f"Исх. № {number.strip() or '____'}/{suffix}"
+    clean = number.strip() or "____"
+    return f"Исх.№{clean}/{suffix}"
 
 
 def term_text(value: int, unit: KPTermUnit) -> str:
@@ -101,23 +100,28 @@ def _rate_str(rate: float) -> str:
     return f"{rate:g}%"
 
 
+def _format_cost(val: float, with_kopecks: bool = True) -> str:
+    if with_kopecks:
+        return f"{val:,.2f}".replace(",", " ").replace(".", ",")
+    return f"{int(round(val)):,}".replace(",", " ")
+
+
 def _rows_and_totals(req: KPRequest):
     """Возвращает (строки таблицы, итого без НДС, НДС, итого с НДС)."""
     cp = req.project.cost_parameters
     include_vat, rate = _vat_info(req)
     rows = []
     if req.price_format == KPPriceFormat.SECTIONS and cp:
-        for it in cp.sections_costs:
-            if it.enabled:
-                rows.append((it.code_mark, it.title, it.cost_rub))
+        for i, it in enumerate([s for s in cp.sections_costs if s.enabled], 1):
+            rows.append((str(i), it.code_mark, it.title, it.cost_rub))
         for aw in getattr(cp, "additional_works", []) or []:
             if aw.enabled and aw.cost_net_rub > 0:
-                rows.append(("Доп.", aw.name, aw.cost_net_rub))
-        net = round(sum(r[2] for r in rows), 2)
+                rows.append((str(len(rows) + 1), "Доп.", aw.name, aw.cost_net_rub))
+        net = round(sum(r[3] for r in rows), 2)
     elif req.price_format == KPPriceFormat.WORKS:
         for i, w in enumerate(req.works, 1):
-            rows.append((str(i), w.name, w.cost_rub))
-        net = round(sum(r[2] for r in rows), 2)
+            rows.append((str(i), "", w.name, w.cost_rub))
+        net = round(sum(r[3] for r in rows), 2)
     else:
         net = round(cp.total_cost_net_rub, 2) if cp else 0.0
     vat = round(net * rate / 100.0, 2) if include_vat else 0.0
@@ -126,34 +130,56 @@ def _rows_and_totals(req: KPRequest):
 
 # ---------------------------------------------------------------- построение текста
 
-def _set_font(run, size=None, bold=None):
+def _set_font(run, size=None, bold=None, italic=None):
     run.font.name = "Times New Roman"
     run._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
     if size:
         run.font.size = Pt(size)
     if bold is not None:
         run.bold = bold
+    if italic is not None:
+        run.italic = italic
 
 
-def _para(doc, text="", bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY, size=12, space_after=6):
+def _para(
+    doc,
+    text="",
+    bold=False,
+    italic=False,
+    align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+    size=11,
+    space_after=6,
+    space_before=0,
+    first_line_indent=None,
+    right_indent=None,
+    left_indent=None,
+):
     p = doc.add_paragraph()
     p.alignment = align
     p.paragraph_format.space_after = Pt(space_after)
-    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_before = Pt(space_before)
+    if first_line_indent is not None:
+        p.paragraph_format.first_line_indent = first_line_indent
+    if right_indent is not None:
+        p.paragraph_format.right_indent = right_indent
+    if left_indent is not None:
+        p.paragraph_format.left_indent = left_indent
     if text:
-        _set_font(p.add_run(text), size, bold)
+        _set_font(p.add_run(text), size, bold, italic)
     return p
 
 
-def _cell_text(cell, text, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, size=11):
+def _cell_text(cell, text, bold=False, italic=False, align=WD_ALIGN_PARAGRAPH.LEFT, size=11):
     cell.text = ""
     p = cell.paragraphs[0]
     p.alignment = align
-    _set_font(p.add_run(text), size, bold)
+    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_before = Pt(2)
+    _set_font(p.add_run(text), size, bold, italic)
 
 
 def _set_borders(table):
-    """Границы таблицы вручную (в бланке компании может не быть стиля «Table Grid»)."""
+    """Границы таблицы вручную."""
     from docx.oxml import OxmlElement
     tbl_pr = table._tbl.tblPr
     borders = OxmlElement("w:tblBorders")
@@ -169,32 +195,67 @@ def _set_borders(table):
 
 def _price_table(doc, req: KPRequest, rows, net, vat, gross):
     include_vat, rate = _vat_info(req)
-    first_col = "Марка" if req.price_format == KPPriceFormat.SECTIONS else "№ п/п"
-    table = doc.add_table(rows=1, cols=3)
-    _set_borders(table)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    widths = [Cm(2.2), Cm(11.0), Cm(3.8)]
-    hdr = table.rows[0].cells
-    for c, t in zip(hdr, [first_col, "Наименование работ", "Стоимость, руб."]):
-        _cell_text(c, t, True, WD_ALIGN_PARAGRAPH.CENTER)
-    for mark, name, cost in rows:
-        r = table.add_row().cells
-        _cell_text(r[0], mark, align=WD_ALIGN_PARAGRAPH.CENTER)
-        _cell_text(r[1], name)
-        _cell_text(r[2], format_rub(cost), align=WD_ALIGN_PARAGRAPH.RIGHT)
+    is_works = (req.price_format == KPPriceFormat.WORKS)
 
-    def total_row(label, value):
-        r = table.add_row().cells
-        merged = r[0].merge(r[1])
-        _cell_text(merged, label, True, WD_ALIGN_PARAGRAPH.RIGHT)
-        _cell_text(r[2], format_rub(value), True, WD_ALIGN_PARAGRAPH.RIGHT)
+    if is_works:
+        # Формат по видам работ (3 колонки: № п/п, Наименование работ, Стоимость, руб.)
+        table = doc.add_table(rows=1, cols=3)
+        _set_borders(table)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        widths = [Cm(1.2), Cm(12.8), Cm(4.0)]
 
-    if include_vat:
-        total_row("ИТОГО без НДС:", net)
-        total_row(f"НДС {_rate_str(rate)}:", vat)
-        total_row("ИТОГО с НДС:", gross)
+        hdr = table.rows[0].cells
+        for c, t in zip(hdr, ["№ п/п", "Наименование работ", "Стоимость, руб."]):
+            _cell_text(c, t, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+
+        for num, _, name, cost in rows:
+            r = table.add_row().cells
+            _cell_text(r[0], num, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+            _cell_text(r[1], name, align=WD_ALIGN_PARAGRAPH.LEFT, size=11)
+            _cell_text(r[2], _format_cost(cost, with_kopecks=True), align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+
+        # Строка ИТОГО:
+        r_itogo = table.add_row().cells
+        _cell_text(r_itogo[0], "", size=11)
+        _cell_text(r_itogo[1], "ИТОГО:", bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, size=11)
+        _cell_text(r_itogo[2], _format_cost(net, with_kopecks=True), bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+
     else:
-        total_row("ИТОГО (НДС не облагается):", net)
+        # Формат по разделам ПД/РД (4 колонки: № п/п, Марка, Наименование, Стоимость, руб.)
+        table = doc.add_table(rows=1, cols=4)
+        _set_borders(table)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        widths = [Cm(1.2), Cm(1.8), Cm(11.0), Cm(4.0)]
+
+        hdr = table.rows[0].cells
+        for c, t in zip(hdr, ["№ п/п", "Марка", "Наименование", "Стоимость, руб."]):
+            _cell_text(c, t, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+
+        stage_header = "Проектная и рабочая документация" if req.stage == KPStage.PD_RD else (
+            "Рабочая документация" if req.stage == KPStage.RD else "Проектная документация"
+        )
+        r_stage = table.add_row().cells
+        merged_stage = r_stage[0].merge(r_stage[1]).merge(r_stage[2]).merge(r_stage[3])
+        _cell_text(merged_stage, stage_header, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+
+        for num, mark, name, cost in rows:
+            r = table.add_row().cells
+            _cell_text(r[0], num, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+            _cell_text(r[1], mark, align=WD_ALIGN_PARAGRAPH.CENTER, size=11)
+            _cell_text(r[2], name, align=WD_ALIGN_PARAGRAPH.LEFT, size=11)
+            _cell_text(r[3], _format_cost(cost, with_kopecks=True), align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+
+        r_itogo = table.add_row().cells
+        merged_itogo = r_itogo[0].merge(r_itogo[1]).merge(r_itogo[2])
+        _cell_text(merged_itogo, "ИТОГО:", bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+        _cell_text(r_itogo[3], _format_cost(net, with_kopecks=True), bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+
+        if include_vat:
+            r_vat = table.add_row().cells
+            merged_vat = r_vat[0].merge(r_vat[1]).merge(r_vat[2])
+            _cell_text(merged_vat, f"ИТОГО, с учетом НДС {_rate_str(rate)}:", bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+            _cell_text(r_vat[3], _format_cost(gross, with_kopecks=True), bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT, size=11)
+
     for row in table.rows:
         for c, w in zip(row.cells, widths):
             c.width = w
@@ -202,136 +263,133 @@ def _price_table(doc, req: KPRequest, rows, net, vat, gross):
 
 
 def _build_body(doc, req: KPRequest):
-    """Основной текст КП: предмет, стоимость, оговорки, срок, оплата, прочее."""
+    """Основной текст КП: обращение, предмет, таблица, стоимость, оговорки, срок, оплата."""
     include_vat, rate = _vat_info(req)
     rows, net, vat, gross = _rows_and_totals(req)
 
-    _para(doc, "По объекту: «" + req.project.object_name + "»", bold=True, align=WD_ALIGN_PARAGRAPH.LEFT)
-    _para(doc, req.salutation, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+    # 1. Обращение: размер 11 pt, Полужирный Курсив, по центру
+    _para(doc, req.salutation, bold=True, italic=True, align=WD_ALIGN_PARAGRAPH.CENTER, size=11, space_after=4)
 
+    # Дополнительная пустая строка после обращения
+    _para(doc, "", size=11, space_after=4)
+
+    # 2. Предмет КП: размер 11 pt, по ширине с красной строкой (1.25 см)
     if req.subject_text.strip():
         subject = req.subject_text.strip()
     else:
         ref = f"В ответ на Ваш запрос от {req.request_date}, " if req.request_date else "По Вашему запросу "
         subject = (f"{ref}направляем коммерческое предложение на {STAGE_TEXT[req.stage]} "
-                   f"по объекту: «{req.project.object_name}».")
-    _para(doc, subject)
+                   f"по объекту: «{req.project.object_name}»:")
+    _para(doc, subject, size=11, align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=6, first_line_indent=Cm(1.25))
 
+    # 3. Входит в стоимость (если указано)
     if req.inclusions:
-        _para(doc, "В коммерческое предложение входит:", space_after=2)
+        _para(doc, "В коммерческое предложение входит:", size=11, space_after=2, first_line_indent=Cm(1.25))
         for item in req.inclusions:
-            _para(doc, "- " + item.rstrip(";."), space_after=2)
-        _para(doc, "", space_after=2)
+            _para(doc, "- " + item.rstrip(";."), size=11, space_after=2, left_indent=Cm(1.25))
+        _para(doc, "", size=11, space_after=4)
 
+    # 4. Таблица стоимости
     if req.price_format != KPPriceFormat.TOTAL and rows:
         _price_table(doc, req, rows, net, vat, gross)
-        _para(doc, "", space_after=2)
+        # Пустая строка после таблицы убрана!
 
+    # 5. Строка стоимости сразу под таблицей (space_before=0, красная строка 1.25 см)
     amount = gross if include_vat else net
     vat_note = f", в т.ч. НДС {_rate_str(rate)}" if include_vat else ", НДС не облагается"
-    _para(doc, f"Итого: {rubles_in_words(amount)}{vat_note}.", bold=True)
+    _para(
+        doc,
+        f"Стоимость работ составляет {rubles_in_words(amount)}{vat_note}.",
+        bold=True,
+        italic=True,
+        size=11,
+        space_after=6,
+        space_before=0,
+        first_line_indent=Cm(1.25),
+    )
 
+    # 6. Исключения (с красной строкой 1.25 см)
     if req.exclusions:
-        _para(doc, "Стоимость не включает: " + "; ".join(e.rstrip(";.") for e in req.exclusions) + ".")
+        _para(
+            doc,
+            "*Стоимость не включает в себя: " + "; ".join(e.rstrip(";.") for e in req.exclusions) + ".",
+            size=11,
+            space_after=6,
+            first_line_indent=Cm(1.25),
+        )
 
-    _para(doc, "Условия оплаты:", bold=True, space_after=2)
-    if req.payment_scheme == KPPaymentScheme.STAGES:
+    # 7. Условия оплаты (с красной строкой 1.25 см)
+    _para(doc, "Условия оплаты:", bold=True, size=11, space_after=2, first_line_indent=Cm(1.25))
+    if req.payment_scheme == KPPaymentScheme.STAGES or req.payment_stages:
         stages = req.payment_stages or DEFAULT_PAYMENT_STAGES
-        _para(doc, "Оплата работ производится поэтапно, с авансированием:", space_after=2)
-        for st in stages:
-            _para(doc, "- " + st.text, space_after=2)
+        if len(stages) == 1:
+            _para(doc, stages[0].text.strip(), size=11, space_after=4, first_line_indent=Cm(1.25))
+        else:
+            _para(doc, "Оплата работ производится поэтапно, с авансированием:", size=11, space_after=2, first_line_indent=Cm(1.25))
+            for st in stages:
+                _para(doc, "- " + st.text.strip().lstrip("- "), size=11, space_after=2, left_indent=Cm(1.25))
     else:
-        _para(doc, f"Оплата производится на условиях авансирования - {req.advance_percent:g}%.")
+        _para(doc, f"Оплата производится на условиях авансирования - {req.advance_percent:g}%.", size=11, space_after=4, first_line_indent=Cm(1.25))
 
+    _para(doc, "", size=11, space_after=2)
+
+    # 8. Срок выполнения (красная строка)
     if req.term_value:
-        _para(doc, f"Срок выполнения работ - {term_text(req.term_value, req.term_unit)}.")
-    if req.note_approval_excluded:
-        _para(doc, "*В срок не входит время согласования документации с заказчиком и заинтересованными "
-                   "организациями.")
+        _para(doc, f"Срок выполнения работ – {term_text(req.term_value, req.term_unit)}.", size=11, space_after=4, first_line_indent=Cm(1.25))
 
+    # 9. Оговорка по согласованию (красная строка)
+    if req.note_approval_excluded:
+        _para(doc, "*В срок не входит время согласования документации с заказчиком и заинтересованными организациями.", size=11, space_after=4, first_line_indent=Cm(1.25))
+
+    # 10. Готовы помочь в разработке ТЗ (красная строка)
     if req.phrase_help_tz:
-        _para(doc, "* Готовы помочь в разработке Технического задания.", align=WD_ALIGN_PARAGRAPH.LEFT,
-              space_after=2)
+        _para(doc, "* Готовы помочь в разработке Технического задания", italic=True, size=11, space_after=4, first_line_indent=Cm(1.25))
+
+    # 11. Встречные предложения (красная строка)
     if req.phrase_counter_offers:
         _para(doc, "* Готовы рассмотреть встречные предложения по срокам и стоимости проектирования.",
-              bold=True, align=WD_ALIGN_PARAGRAPH.LEFT)
-    _para(doc, f"Коммерческое предложение действительно - {req.validity_days} рабочих дней.",
-          align=WD_ALIGN_PARAGRAPH.LEFT)
+              bold=True, italic=True, size=11, space_after=4, first_line_indent=Cm(1.25))
+
+    # 12. Действительность КП (красная строка)
+    _para(doc, f"Коммерческое предложение действительно - {req.validity_days} рабочих дней.", size=11, space_after=6, first_line_indent=Cm(1.25))
 
 
-# ---------------------------------------------------------------- режимы
+# ---------------------------------------------------------------- оформление подписи и бланка
 
-def _signer_line(req: KPRequest) -> str:
-    company = req.company_name.strip() or "ООО «Компания»"
-    name = req.signer_name.strip() or "И.О. Фамилия"
-    return f"{req.signer_title.strip() or 'Директор'} {company}   ________________   {name}"
+def _format_signer_paragraph(p, req: KPRequest):
+    """
+    Форматирует строку подписи директора:
+    'Директор ООО «ТПС» ___________________________________/{ФИО}'
+    """
+    p.text = ""
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title = req.signer_title.strip() or "Директор"
+    company = req.company_name.strip() or "ООО «ТПС»"
+    name = (req.signer_name.strip() or "Валова М.М.").lstrip("/")
 
+    r1 = p.add_run(f"{title} {company} ")
+    _set_font(r1, size=11, bold=True, italic=True)
 
-def _executor_line(req: KPRequest) -> str:
-    return "Исп. " + (req.executor.strip() or "Фамилия И.О. тел. +7 ___ ___ __ __")
+    # Удлиненное нижнее подчеркивание (35 символов)
+    r2 = p.add_run("___________________________________")
+    _set_font(r2, size=11, bold=False, italic=False)
 
-
-def _build_neutral(req: KPRequest, d: date_cls) -> Document:
-    doc = Document()
-    sec = doc.sections[0]
-    sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
-    sec.left_margin, sec.right_margin = Cm(2.0), Cm(1.5)
-    sec.top_margin, sec.bottom_margin = Cm(1.75), Cm(1.5)
-    normal = doc.styles["Normal"]
-    normal.font.name = "Times New Roman"
-    normal.font.size = Pt(12)
-
-    company = req.company_name.strip() or "ООО «Компания»"
-    _para(doc, "Архитектурно-строительное проектирование", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-          space_after=0)
-    _para(doc, f"{company}  ИНН ____  КПП ____  ОГРН ____", align=WD_ALIGN_PARAGRAPH.CENTER, size=10,
-          space_after=0)
-    _para(doc, "Адрес: ________, тел.: ________, e-mail: ________", align=WD_ALIGN_PARAGRAPH.CENTER, size=10,
-          space_after=12)
-
-    t = doc.add_table(rows=1, cols=2)
-    _cell_text(t.rows[0].cells[0], outgoing_number_text(req.outgoing_number, d) + "\n" + format_kp_date(d),
-               size=12)
-    _cell_text(t.rows[0].cells[1], "\n".join(req.addressee_lines) or "Должность\nОрганизация\nФ.И.О.",
-               align=WD_ALIGN_PARAGRAPH.RIGHT, size=12)
-    _para(doc, "", space_after=6)
-
-    _build_body(doc, req)
-
-    _para(doc, "С уважением,", bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, space_after=2)
-    _para(doc, _signer_line(req), bold=True, align=WD_ALIGN_PARAGRAPH.LEFT, space_after=24)
-    _para(doc, _executor_line(req), align=WD_ALIGN_PARAGRAPH.LEFT, size=10)
-    return doc
+    r3 = p.add_run(f"/{name} ")
+    _set_font(r3, size=11, bold=True, italic=True)
 
 
-def _replace_in_paragraph(p, mapping: dict) -> bool:
-    text = "".join(r.text for r in p.runs)
-    if "{{" not in text:
-        return False
-    changed = False
-    for key, val in mapping.items():
-        if key in text:
-            text = text.replace(key, val)
-            changed = True
-    if changed and p.runs:
-        lines = text.split("\n")
-        p.runs[0].text = lines[0]
-        for r in p.runs[1:]:
-            r.text = ""
-        for line in lines[1:]:
-            p.runs[0].add_break()
-            p.runs[0].add_text(line)
-    return changed
+def _format_executor_paragraph(p, req: KPRequest):
+    """
+    Форматирует строку исполнителя строго по образцу ТПС:
+    'Исп. Эберт Е.В. Тел. +7 932 326 93 83'
+    """
+    p.text = ""
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    raw = req.executor.strip() or "Эберт Е.В. Тел. +7 932 326 93 83"
+    exec_str = raw if raw.startswith("Исп.") else f"Исп. {raw}"
 
-
-def _iter_paragraphs(doc):
-    for p in doc.paragraphs:
-        yield p
-    for t in doc.tables:
-        for row in t.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    yield p
+    r = p.add_run(exec_str)
+    _set_font(r, size=10, bold=False, italic=True)
 
 
 def _build_corporate(req: KPRequest, d: date_cls, letterhead: str) -> Document:
@@ -340,15 +398,54 @@ def _build_corporate(req: KPRequest, d: date_cls, letterhead: str) -> Document:
         "{{OUT_NUM}}": outgoing_number_text(req.outgoing_number, d),
         "{{DATE}}": format_kp_date(d),
         "{{ADDRESSEE}}": "\n".join(req.addressee_lines),
-        "{{SIGNER}}": _signer_line(req),
-        "{{EXECUTOR}}": _executor_line(req),
     }
     anchor = None
-    for p in _iter_paragraphs(doc):
+    for p in doc.paragraphs:
         if "{{BODY}}" in p.text:
             anchor = p
+        elif "{{SIGNER}}" in p.text:
+            _format_signer_paragraph(p, req)
+        elif "{{EXECUTOR}}" in p.text:
+            _format_executor_paragraph(p, req)
         else:
-            _replace_in_paragraph(p, mapping)
+            for key, val in mapping.items():
+                if key in p.text:
+                    p.text = p.text.replace(key, val)
+
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    if "{{BODY}}" in p.text:
+                        anchor = p
+                    elif "{{SIGNER}}" in p.text:
+                        _format_signer_paragraph(p, req)
+                    elif "{{EXECUTOR}}" in p.text:
+                        _format_executor_paragraph(p, req)
+                    else:
+                        for key, val in mapping.items():
+                            if key in p.text:
+                                p.text = p.text.replace(key, val)
+
+    # Две пустые строки перед «По объекту: ...» в левом блоке шапки
+    if len(doc.tables) > 1 and len(doc.tables[1].rows) > 0:
+        c0 = doc.tables[1].rows[0].cells[0]
+        while len(c0.paragraphs) < 6:
+            c0.add_paragraph()
+        c0.paragraphs[4].text = ""
+        c0.paragraphs[4].paragraph_format.space_before = Pt(0)
+        c0.paragraphs[4].paragraph_format.space_after = Pt(0)
+        c0.paragraphs[5].text = ""
+        c0.paragraphs[5].paragraph_format.space_before = Pt(0)
+        c0.paragraphs[5].paragraph_format.space_after = Pt(0)
+
+        p_obj = c0.paragraphs[6] if len(c0.paragraphs) > 6 else c0.add_paragraph()
+        p_obj.text = ""
+        r = p_obj.add_run(f"По объекту: «{req.project.object_name}»")
+        _set_font(r, size=10, bold=True, italic=True)
+        p_obj.paragraph_format.space_before = Pt(0)
+        p_obj.paragraph_format.space_after = Pt(0)
+
     if anchor is None:
         raise ValueError("В бланке не найдена метка {{BODY}}")
 
@@ -365,7 +462,12 @@ def _build_corporate(req: KPRequest, d: date_cls, letterhead: str) -> Document:
 def generate_kp_docx(req: KPRequest) -> io.BytesIO:
     d = _parse_date(req.date)
     letterhead = get_letterhead_path()
-    doc = _build_corporate(req, d, letterhead) if letterhead else _build_neutral(req, d)
+    if not letterhead:
+        raise FileNotFoundError(
+            "Фирменный бланк компании не найден (ожидается файл data/private/kp_letterhead.docx или KP_LETTERHEAD_PATH). "
+            "Формирование КП доступно только на фирменном бланке организации."
+        )
+    doc = _build_corporate(req, d, letterhead)
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
